@@ -1,7 +1,9 @@
-# Structured Mermaid viewer
+# Mermaid Studio
 
-A simple graph viewer using the same Mermaid syntax. The goal is **guidance for
+A browser-based graph viewer using standard Mermaid syntax. The goal is **guidance for
 reading the diagram, not a redesigned application around it**.
+
+**Live app:** https://paul.mou.dev/mermaid-studio/
 
 The whole graph stays visible: no dashboard, overview cards, collapsed steps,
 or numbered-reference lookups. Natural node sizes, consistent text, source
@@ -13,8 +15,9 @@ the presentation close to a conventional diagram.
 Use Node.js 22.18 or newer:
 
 ```sh
+git clone https://github.com/moomou/mermaid-studio.git
 cd mermaid-studio
-npm install
+npm ci
 npm run dev
 ```
 
@@ -126,6 +129,9 @@ npm run preview
 
 `dist/` is a static site and supports hosting under a subdirectory. Tests use
 Node's built-in runner; browser work uses `agent-browser`.
+
+Pushes to `main` are tested, built, and deployed to GitHub Pages by
+`.github/workflows/pages.yml`.
 
 | Module | Responsibility |
 | --- | --- |
