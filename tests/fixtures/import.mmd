@@ -1,0 +1,9 @@
+---
+title: Imported diagram
+---
+flowchart LR
+  subgraph input[Imported boundary]
+    A[Uploaded source] --> B{Ready?}
+  end
+  B -->|yes| C[Saved output]
+  C -. feedback .-> A
