@@ -127,11 +127,11 @@ npm run build
 npm run preview
 ```
 
-`dist/` is a static site and supports hosting under a subdirectory. Tests use
+`docs/` is the production site and supports hosting under a subdirectory. Tests use
 Node's built-in runner; browser work uses `agent-browser`.
 
-Pushes to `main` are tested, built, and deployed to GitHub Pages by
-`.github/workflows/pages.yml`.
+GitHub Pages serves `docs/` from `main`. The CI workflow rebuilds the site and
+fails if the committed production output is stale.
 
 | Module | Responsibility |
 | --- | --- |
