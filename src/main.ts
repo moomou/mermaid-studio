@@ -10,14 +10,26 @@ import type { DiagramLayout } from './model.ts';
 import { browserMeasure } from './text.ts';
 import { Viewport } from './viewport.ts';
 import { download, exportSvg, filename, pngBlob } from './export.ts';
+import {
+  activateTab, activeTab, addTab, closeTab, createWorkspace, decodeWorkspace, encodeWorkspace,
+  oppositeTheme, resolveTheme, updateTab,
+} from './workspace.ts';
+import type { DiagramTab, Theme, Workspace } from './workspace.ts';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <div id="viewer" tabindex="0" role="region" aria-label="Diagram. Drag to pan, Control or Command plus scroll to zoom. Select a node or arrow to trace it."></div>
-  <div id="tools" role="toolbar" aria-label="Graph controls">
-    <button id="edit">Source</button><button id="open">Open</button><span class="divider"></span>
-    <button id="svg" disabled>SVG</button><button id="png" disabled>PNG</button><span class="divider"></span>
-    <button id="zoom-out" aria-label="Zoom out">&minus;</button><span id="zoom">100%</span><button id="zoom-in" aria-label="Zoom in">+</button><button id="fit">Fit</button>
+  <div id="topbar">
+    <div id="tab-strip">
+      <div id="tabs" role="tablist" aria-label="Open diagrams"></div>
+      <button id="new-tab" aria-label="New diagram" title="New diagram">+</button>
+    </div>
+    <div id="tools" role="toolbar" aria-label="Graph controls">
+      <button id="edit">Source</button><button id="open">Open</button><span class="divider"></span>
+      <button id="svg" disabled>SVG</button><button id="png" disabled>PNG</button><span class="divider"></span>
+      <button id="zoom-out" aria-label="Zoom out">&minus;</button><span id="zoom">100%</span><button id="zoom-in" aria-label="Zoom in">+</button><button id="fit">Fit</button><span class="divider"></span>
+      <button id="theme">Dark</button>
+    </div>
   </div>
+  <div id="viewer" tabindex="0" role="tabpanel" aria-label="Diagram. Drag to pan, Control or Command plus scroll to zoom. Select a node or arrow to trace it."></div>
   <div id="status" role="status">Rendering diagram...</div>
   <div id="error" role="alert" hidden></div>
   <dialog id="source-dialog">
@@ -49,13 +61,15 @@ const errorBox = get('error', 'div');
 const sourceError = get('source-error', 'pre');
 const svgButton = get('svg', 'button');
 const pngButton = get('png', 'button');
+const tabs = get('tabs', 'div');
+const themeButton = get('theme', 'button');
 const engine = new ELK({ workerFactory: () => new Worker(workerUrl) });
 const measure = browserMeasure();
 const viewport = new Viewport(viewer, scale => { get('zoom', 'span').textContent = `${Math.round(scale * 100)}%`; });
-const storageKey = 'structured-mermaid-source';
-let activeSource = examples[0].source;
-let activeOriginal = false;
-let activeAutomatic = true;
+const workspaceStorageKey = 'mermaid-studio-workspace-v1';
+const legacyStorageKey = 'structured-mermaid-source';
+const themeStorageKey = 'mermaid-studio-theme';
+const newDiagramSource = 'flowchart LR\n  A[Start] --> B[Finish]\n';
 let title = 'Diagram';
 let svg: SVGSVGElement | undefined;
 let layout: DiagramLayout | undefined;
@@ -63,23 +77,191 @@ let selected: Selection;
 let revision = 0;
 let renderedRevision = -1;
 let running = false;
-let pending = { source: activeSource, original: false, automatic: true };
 let cache: { key: string; layout: DiagramLayout } | undefined;
+let editAfterRender: string | undefined;
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function notify(text: string): void {
+const notices = new Set<string>();
+let storageAvailable = true;
+
+function readStorage(key: string): string | null {
+  if (!storageAvailable) return null;
+  try {
+    return localStorage.getItem(key);
+  } catch (error) {
+    if (!(error instanceof DOMException)) throw error;
+    storageAvailable = false;
+    notices.add('Browser storage is unavailable. Tabs and theme changes will last for this session only.');
+    return null;
+  }
+}
+
+let generatedId = 0;
+function newTabId(): string {
+  generatedId++;
+  return typeof crypto.randomUUID === 'function'
+    ? `diagram-${crypto.randomUUID()}`
+    : `diagram-${Date.now().toString(36)}-${generatedId}`;
+}
+
+function loadWorkspace(): Workspace {
+  const saved = readStorage(workspaceStorageKey);
+  if (saved) {
+    try {
+      return decodeWorkspace(saved);
+    } catch (error) {
+      notices.add(`${message(error)} The previous single diagram was used instead.`);
+    }
+  }
+  return createWorkspace(readStorage(legacyStorageKey) ?? examples[0].source, newTabId());
+}
+
+let workspace = loadWorkspace();
+const initialTab = activeTab(workspace);
+let pending = {
+  tabId: initialTab.id,
+  source: initialTab.source,
+  original: initialTab.original,
+  automatic: initialTab.automatic,
+};
+const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+const savedTheme = readStorage(themeStorageKey);
+if (savedTheme !== null && savedTheme !== 'light' && savedTheme !== 'dark') {
+  notices.add('The saved color theme was invalid, so the system preference was used.');
+}
+let followsSystemTheme = savedTheme !== 'light' && savedTheme !== 'dark';
+let theme: Theme = resolveTheme(savedTheme, systemTheme.matches);
+let liveStatus = 'Rendering diagram...';
+
+function refreshStatus(): void {
+  const text = [liveStatus, ...notices].filter(Boolean).join(' ');
   status.textContent = text;
   status.hidden = !text;
 }
 
-try {
-  activeSource = localStorage.getItem(storageKey) ?? activeSource;
-} catch (error) {
-  if (!(error instanceof DOMException)) throw error;
-  notify('Browser storage is unavailable. Use Save .mmd to keep your source.');
+function notify(text: string): void {
+  liveStatus = text;
+  refreshStatus();
+}
+
+function writeStorage(key: string, value: string): void {
+  if (!storageAvailable) return;
+  try {
+    localStorage.setItem(key, value);
+  } catch (error) {
+    if (!(error instanceof DOMException)) throw error;
+    storageAvailable = false;
+    notices.add('Browser storage is unavailable. Tabs and theme changes will last for this session only.');
+    refreshStatus();
+  }
+}
+
+function persistWorkspace(): void {
+  writeStorage(workspaceStorageKey, encodeWorkspace(workspace));
+  writeStorage(legacyStorageKey, activeTab(workspace).source);
+}
+
+function applyTheme(next: Theme, persist = false): void {
+  theme = next;
+  document.documentElement.dataset.theme = theme;
+  themeButton.textContent = theme === 'dark' ? 'Light' : 'Dark';
+  themeButton.title = `Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`;
+  themeButton.setAttribute('aria-label', themeButton.title);
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+    ?.setAttribute('content', theme === 'dark' ? '#10171b' : '#f7f8fa');
+  if (persist) {
+    followsSystemTheme = false;
+    writeStorage(themeStorageKey, theme);
+  }
+}
+
+function tabLabel(item: DiagramTab, index: number): string {
+  return item.title === 'Untitled diagram' ? `Diagram ${index + 1}` : item.title;
+}
+
+function renderTabs(): void {
+  const focusedId = document.activeElement instanceof HTMLButtonElement
+    ? document.activeElement.dataset.tabId
+    : undefined;
+  tabs.replaceChildren(...workspace.tabs.map((item, index) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = `tab-item${item.id === workspace.activeId ? ' is-active' : ''}`;
+    wrapper.setAttribute('role', 'presentation');
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'tab';
+    button.dataset.tabId = item.id;
+    button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(item.id === workspace.activeId));
+    button.setAttribute('aria-controls', 'viewer');
+    button.tabIndex = item.id === workspace.activeId ? 0 : -1;
+    button.textContent = tabLabel(item, index);
+    button.title = button.textContent;
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'tab-close';
+    close.dataset.closeTab = item.id;
+    close.disabled = workspace.tabs.length === 1;
+    close.setAttribute('aria-label', `Close ${button.textContent}`);
+    close.title = workspace.tabs.length === 1 ? 'At least one diagram must remain open' : `Close ${button.textContent}`;
+    close.textContent = '\u00d7';
+    wrapper.append(button, close);
+    return wrapper;
+  }));
+  if (focusedId) focusTab(focusedId);
+}
+
+function focusTab(id: string): void {
+  requestAnimationFrame(() => {
+    [...tabs.querySelectorAll<HTMLButtonElement>('[data-tab-id]')]
+      .find(button => button.dataset.tabId === id)?.focus();
+  });
+}
+
+function selectDiagramTab(id: string, focus = false): void {
+  if (id === workspace.activeId) {
+    if (focus) focusTab(id);
+    return;
+  }
+  workspace = activateTab(workspace, id);
+  renderTabs();
+  persistWorkspace();
+  const item = activeTab(workspace);
+  request(item.source, item.original, item.automatic, item.id);
+  if (focus) focusTab(id);
+}
+
+function addDiagramTab(sourceValue = newDiagramSource, edit = false): DiagramTab {
+  const item: DiagramTab = {
+    id: newTabId(),
+    title: 'Untitled diagram',
+    source: newDiagramSource,
+    original: false,
+    automatic: true,
+  };
+  workspace = addTab(workspace, item);
+  renderTabs();
+  persistWorkspace();
+  if (edit) editAfterRender = item.id;
+  request(sourceValue, false, true, item.id);
+  return item;
+}
+
+function closeDiagramTab(id: string): void {
+  const wasActive = id === workspace.activeId;
+  if (editAfterRender === id) editAfterRender = undefined;
+  workspace = closeTab(workspace, id);
+  renderTabs();
+  persistWorkspace();
+  if (wasActive) {
+    const item = activeTab(workspace);
+    request(item.source, item.original, item.automatic, item.id);
+  }
 }
 
 function select(selection: Selection): void {
@@ -96,8 +278,13 @@ function showSource(): void {
   source.focus();
 }
 
-function request(value: string, native = original.checked, infer = automatic.checked): void {
-  pending = { source: value, original: native, automatic: infer };
+function request(
+  value: string,
+  native = original.checked,
+  infer = automatic.checked,
+  tabId = workspace.activeId,
+): void {
+  pending = { tabId, source: value, original: native, automatic: infer };
   revision++;
   svgButton.disabled = true;
   pngButton.disabled = true;
@@ -139,14 +326,16 @@ async function render(): Promise<void> {
     svg = next;
     layout = nextLayout;
     selected = undefined;
-    activeSource = input.source;
-    activeOriginal = input.original;
-    activeAutomatic = input.automatic;
-    title = graph.title;
+    workspace = updateTab(workspace, input.tabId, {
+      source: input.source,
+      original: input.original,
+      automatic: input.automatic,
+      title: graph.title,
+    });
+    const tabIndex = workspace.tabs.findIndex(item => item.id === input.tabId);
+    title = tabLabel(workspace.tabs[tabIndex], tabIndex);
     renderedRevision = token;
-    document.title = `${title} - Mermaid viewer`;
-    viewer.style.backgroundColor = graph.background;
-    document.body.style.backgroundColor = graph.background;
+    document.title = `${title} - Mermaid Studio`;
     next.style.backgroundColor = graph.background;
     viewport.set(next);
     if (dialog.open) dialog.close();
@@ -155,11 +344,12 @@ async function render(): Promise<void> {
     svgButton.disabled = false;
     pngButton.disabled = native;
     pngButton.title = native ? 'Use SVG export for native Mermaid diagrams.' : 'Export the complete diagram as PNG';
+    renderTabs();
+    persistWorkspace();
     notify(graph.kind === 'native' ? graph.reason : graph.warnings.join(' '));
-    try { localStorage.setItem(storageKey, activeSource); }
-    catch (error) {
-      if (!(error instanceof DOMException)) throw error;
-      notify('Browser storage is unavailable. Use Save .mmd to keep your source.');
+    if (editAfterRender === input.tabId) {
+      editAfterRender = undefined;
+      queueMicrotask(showSource);
     }
   } catch (error) {
     if (token !== revision) return;
@@ -179,13 +369,44 @@ function cancelEdit(): void {
   if (dialog.open) dialog.close();
   sourceError.hidden = true;
   errorBox.hidden = true;
-  if (renderedRevision !== revision) request(activeSource, activeOriginal, activeAutomatic);
+  if (renderedRevision !== revision) {
+    const item = activeTab(workspace);
+    request(item.source, item.original, item.automatic, item.id);
+  }
 }
 
+get('new-tab', 'button').addEventListener('click', () => { addDiagramTab(newDiagramSource, true); });
 get('edit', 'button').addEventListener('click', showSource);
 get('source-form', 'form').addEventListener('submit', event => { event.preventDefault(); request(source.value); });
 get('cancel', 'button').addEventListener('click', cancelEdit);
 dialog.addEventListener('cancel', event => { event.preventDefault(); cancelEdit(); });
+themeButton.addEventListener('click', () => { applyTheme(oppositeTheme(theme), true); });
+systemTheme.addEventListener('change', event => {
+  if (followsSystemTheme) applyTheme(event.matches ? 'dark' : 'light');
+});
+tabs.addEventListener('click', event => {
+  if (!(event.target instanceof Element)) return;
+  const close = event.target.closest<HTMLButtonElement>('[data-close-tab]');
+  if (close?.dataset.closeTab) {
+    closeDiagramTab(close.dataset.closeTab);
+    return;
+  }
+  const tab = event.target.closest<HTMLButtonElement>('[data-tab-id]');
+  if (tab?.dataset.tabId) selectDiagramTab(tab.dataset.tabId);
+});
+tabs.addEventListener('keydown', event => {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement) || !target.dataset.tabId) return;
+  const index = workspace.tabs.findIndex(item => item.id === target.dataset.tabId);
+  let next = index;
+  if (event.key === 'ArrowLeft') next = (index - 1 + workspace.tabs.length) % workspace.tabs.length;
+  else if (event.key === 'ArrowRight') next = (index + 1) % workspace.tabs.length;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = workspace.tabs.length - 1;
+  else return;
+  event.preventDefault();
+  selectDiagramTab(workspace.tabs[next].id, true);
+});
 source.addEventListener('keydown', event => {
   if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
     event.preventDefault(); get('source-form', 'form').requestSubmit();
@@ -199,7 +420,7 @@ get('file', 'input').addEventListener('change', async event => {
   if (!(input instanceof HTMLInputElement) || !input.files?.[0]) return;
   try {
     if (input.files[0].size > 200_000) throw new Error('Open a Mermaid source file smaller than 200 KB.');
-    request(await input.files[0].text(), false, true);
+    addDiagramTab(await input.files[0].text());
   } catch (error) {
     errorBox.textContent = message(error); errorBox.hidden = false;
   } finally { input.value = ''; }
@@ -231,4 +452,7 @@ pngButton.addEventListener('click', async () => {
 window.addEventListener('pagehide', event => {
   if (!event.persisted) { viewport.destroy(); engine.terminateWorker(); }
 });
-request(activeSource, false, true);
+applyTheme(theme);
+renderTabs();
+refreshStatus();
+request(initialTab.source, initialTab.original, initialTab.automatic, initialTab.id);

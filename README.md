@@ -25,11 +25,16 @@ Open **http://127.0.0.1:4381**. This project has its own package scripts, separa
 from the monorepo root. There is no backend, account, AI service, Java runtime,
 or Eclipse IDE requirement.
 
-The small toolbar provides source input, `.mmd` import, SVG/PNG export, zoom, and
-fit. The source dialog also allows the same source to be rendered with original
-Mermaid, or with only its declared subgraphs rather than inferred regions.
-Select a node or arrow to trace its connections; click blank space or press
-Escape to clear. Authored safe hyperlinks remain links.
+The tab strip keeps multiple diagrams open locally. Use **+** for a new diagram,
+**Open** to import a `.mmd` file into its own tab, and the close control on each
+tab to remove it. Tabs, sources, layout choices, the active tab, and the
+light/dark appearance are restored on the next visit.
+
+The toolbar also provides source input, SVG/PNG export, zoom, fit, and a
+light/dark toggle. The source dialog allows the same source to be rendered with
+original Mermaid, or with only its declared subgraphs rather than inferred
+regions. Select a node or arrow to trace its connections; click blank space or
+press Escape to clear. Authored safe hyperlinks remain links.
 
 Drag or scroll to pan; Ctrl/Command + scroll zooms. With the canvas focused,
 arrow keys pan, `+`/`-` zoom, and `0` fits the whole diagram. All label lines are
@@ -111,9 +116,9 @@ Queued renders cannot replace a newer edit with stale output.
 The separated-route grid is capped at 160,000 points; excessively dense layouts
 report an explicit error and can be viewed with the original Mermaid layout.
 
-The last successfully rendered source is saved in local browser storage. No
-diagram source is uploaded. External assets explicitly referenced by a native
-Mermaid diagram may still be requested by Mermaid.
+Successfully rendered tabs and the selected appearance are saved in local
+browser storage. No diagram source is uploaded. External assets explicitly
+referenced by a native Mermaid diagram may still be requested by Mermaid.
 
 Exports contain the complete diagram, not the current pan/zoom crop or selection
 dimming. Structured SVGs are self-contained and do not use `foreignObject`.
