@@ -6,7 +6,7 @@ import { parseSource } from '../src/parser.ts';
 import { examples } from '../src/examples.ts';
 import { buildStructure } from '../src/structure.ts';
 import { layoutGraph } from '../src/layout.ts';
-import { BOUNDARY_ROUTE_GAP, CROSS_ROUTE_GAP } from '../src/routing.ts';
+import { BOUNDARY_ROUTE_GAP, CROSS_ROUTE_GAP, routeConnections } from '../src/routing.ts';
 import { renderDiagram } from '../src/render.ts';
 import { wrapText, approximateMeasure } from '../src/text.ts';
 import type { Box, DiagramLayout, FlowGraph, Point } from '../src/model.ts';
@@ -136,6 +136,34 @@ test('all shipped flowcharts preserve graph entities and non-overlapping geometr
       assertLayout(layout);
     }
   }
+});
+
+test('cross-region routing uses bounded scratch memory without changing routes', async () => {
+  const input = await graph(examples[0].source);
+  const layout = await layoutGraph(input, engine, { automatic: true, detail: true });
+  const expected = layout.edges.filter(edge => edge.crossSection);
+  layout.edges = layout.edges.filter(edge => !edge.crossSection);
+  let allocatedBytes = 0;
+  const floatArrays = globalThis.Float64Array;
+  const integerArrays = globalThis.Int32Array;
+  const track = <T extends typeof Float64Array | typeof Int32Array>(constructor: T): T => new Proxy(constructor, {
+    construct(target, args) {
+      const array = Reflect.construct(target, args);
+      allocatedBytes += array.byteLength;
+      return array;
+    },
+  });
+  globalThis.Float64Array = track(floatArrays);
+  globalThis.Int32Array = track(integerArrays);
+  try {
+    routeConnections(layout, approximateMeasure);
+  } finally {
+    globalThis.Float64Array = floatArrays;
+    globalThis.Int32Array = integerArrays;
+  }
+  assert.deepEqual(layout.edges.filter(edge => edge.crossSection), expected);
+  const maximumScratchBytes = 160_000 * 2 * (Float64Array.BYTES_PER_ELEMENT + Int32Array.BYTES_PER_ELEMENT);
+  assert.ok(allocatedBytes <= maximumScratchBytes, `Routing allocated ${allocatedBytes} scratch bytes`);
 });
 
 test('declared-only grouping, cycles, self-loops, parallel edges, disconnected nodes and empty groups', async () => {

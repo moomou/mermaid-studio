@@ -116,6 +116,11 @@ Queued renders cannot replace a newer edit with stale output.
 The separated-route grid is capped at 160,000 points; excessively dense layouts
 report an explicit error and can be viewed with the original Mermaid layout.
 
+Only one structured layout is cached, and closing its tab releases that cache.
+Unchanged renders reuse the parsed graph without rewriting browser storage.
+Native-only sessions do not start an ELK worker. Routing reuses grid-search
+scratch buffers across connections within the grid limit.
+
 Successfully rendered tabs and the selected appearance are saved in local
 browser storage. No diagram source is uploaded. External assets explicitly
 referenced by a native Mermaid diagram may still be requested by Mermaid.
@@ -137,6 +142,13 @@ Node's built-in runner; browser work uses `agent-browser`.
 
 GitHub Pages serves `docs/` from `main`. The CI workflow rebuilds the site and
 fails if the committed production output is stale.
+
+The footer shows the deployed build's date version in UTC. `npm run build`
+generates `docs/version.json` and embeds its timestamp into the app. The date
+updates when source, public assets, dependencies, or build configuration change;
+identical rebuilds reuse the stamp so CI stays reproducible. Commit the version
+metadata together with the generated `docs/` assets. Local development is
+labelled **Development build**, rather than displaying a deployment date.
 
 | Module | Responsibility |
 | --- | --- |

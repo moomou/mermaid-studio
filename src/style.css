@@ -126,7 +126,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 #zoom { width: 35px; text-align: center; font: 10px ui-monospace, monospace; color: var(--muted); }
 #viewer {
   position: absolute;
-  inset: 48px 0 0;
+  inset: 48px 0 24px;
   overflow: hidden;
   touch-action: none;
   cursor: grab;
@@ -135,10 +135,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
 }
 #viewer:focus-visible { box-shadow: inset 0 0 0 1px var(--focus); }
 #viewer.is-panning, #viewer.is-panning * { cursor: grabbing !important; user-select: none; }
+#version {
+  position: absolute;
+  inset: auto 0 0;
+  height: 24px;
+  padding: 5px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  background: var(--surface);
+  text-align: right;
+  font: 10px/13px ui-monospace, monospace;
+}
 #status, #error {
   position: absolute;
   left: 14px;
-  bottom: 12px;
+  bottom: 36px;
   max-width: min(540px, calc(100% - 28px));
   padding: 8px 11px;
   color: var(--text);

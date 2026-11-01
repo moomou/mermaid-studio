@@ -90,10 +90,14 @@ export function addTab(value: Workspace, item: DiagramTab): Workspace {
 }
 
 export function updateTab(value: Workspace, id: string, updates: Partial<Omit<DiagramTab, 'id'>>): Workspace {
-  if (!value.tabs.some(item => item.id === id)) throw new Error('The requested diagram tab does not exist.');
+  const current = value.tabs.find(item => item.id === id);
+  if (!current) throw new Error('The requested diagram tab does not exist.');
+  const next = { ...current, ...updates };
+  if (next.title === current.title && next.source === current.source
+    && next.original === current.original && next.automatic === current.automatic) return value;
   return {
     ...value,
-    tabs: value.tabs.map(item => item.id === id ? { ...item, ...updates } : item),
+    tabs: value.tabs.map(item => item.id === id ? next : item),
   };
 }
 

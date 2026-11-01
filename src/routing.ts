@@ -128,6 +128,7 @@ class GridRouter {
   private regions: Int16Array;
   private layout: DiagramLayout;
   private obstacles: Obstacle[];
+  private search?: { distance: Float64Array; previous: Int32Array };
 
   constructor(layout: DiagramLayout, obstacles: Obstacle[], allPorts: Port[]) {
     this.layout = layout;
@@ -215,8 +216,12 @@ class GridRouter {
     if (first < 0 || last < 0) return undefined;
     const sourceRegion = this.layout.sections.findIndex(section => section.section.id === source);
     const targetRegion = this.layout.sections.findIndex(section => section.section.id === target);
-    const distance = new Float64Array(this.size * 2).fill(Infinity);
-    const previous = new Int32Array(this.size * 2).fill(-1);
+    const { distance, previous } = this.search ??= {
+      distance: new Float64Array(this.size * 2),
+      previous: new Int32Array(this.size * 2),
+    };
+    distance.fill(Infinity);
+    previous.fill(-1);
     const point = (vertex: number): Point => ({ x: this.xs[vertex % this.nx], y: this.ys[Math.floor(vertex / this.nx)] });
     const firstState = first * 2 + (start.normal.x ? 0 : 1);
     const heap = new Heap();
@@ -226,28 +231,33 @@ class GridRouter {
     while ((item = heap.pop())) {
       if (distance[item.state] !== item.cost) continue;
       const vertex = item.state >>> 1;
-      const current = point(vertex);
       if (vertex === last) {
         const path: Point[] = [];
         let state = item.state;
-        while (state >= 0) { path.push(point(state >>> 1)); state = previous[state]; }
+        while (state >= 0) {
+          const step = state >>> 1;
+          path.push(point(step));
+          this.traffic[step] += 20;
+          state = previous[state];
+        }
         path.reverse();
-        for (const p of path) this.traffic[index(p)] += 20;
         return simplify([start.anchor, ...path, end.anchor]);
       }
       const x = vertex % this.nx;
       const y = Math.floor(vertex / this.nx);
-      const neighbors = [
-        x > 0 && !this.horizontal[vertex - 1] ? vertex - 1 : -1,
-        x + 1 < this.nx && !this.horizontal[vertex] ? vertex + 1 : -1,
-        y > 0 && !this.vertical[vertex - this.nx] ? vertex - this.nx : -1,
-        y + 1 < this.ys.length && !this.vertical[vertex] ? vertex + this.nx : -1,
-      ];
-      for (const next of neighbors) {
+      const currentX = this.xs[x];
+      const currentY = this.ys[y];
+      for (let side = 0; side < 4; side++) {
+        let next = -1;
+        if (side === 0 && x > 0 && !this.horizontal[vertex - 1]) next = vertex - 1;
+        else if (side === 1 && x + 1 < this.nx && !this.horizontal[vertex]) next = vertex + 1;
+        else if (side === 2 && y > 0 && !this.vertical[vertex - this.nx]) next = vertex - this.nx;
+        else if (side === 3 && y + 1 < this.ys.length && !this.vertical[vertex]) next = vertex + this.nx;
         if (next < 0) continue;
-        const p = point(next);
-        const dx = p.x - current.x;
-        const dy = p.y - current.y;
+        const nextX = this.xs[next % this.nx];
+        const nextY = this.ys[Math.floor(next / this.nx)];
+        const dx = nextX - currentX;
+        const dy = nextY - currentY;
         if (vertex === first && dx * start.normal.x + dy * start.normal.y < 0) continue;
         if (next === last && dx * end.normal.x + dy * end.normal.y > 0) continue;
         const direction = dx ? 0 : 1;
@@ -258,7 +268,7 @@ class GridRouter {
         if (cost >= distance[state]) continue;
         distance[state] = cost;
         previous[state] = item.state;
-        heap.push({ state, cost, priority: cost + Math.abs(p.x - end.lead.x) + Math.abs(p.y - end.lead.y) });
+        heap.push({ state, cost, priority: cost + Math.abs(nextX - end.lead.x) + Math.abs(nextY - end.lead.y) });
       }
     }
     return undefined;

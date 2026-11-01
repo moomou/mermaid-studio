@@ -30,6 +30,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     </div>
   </div>
   <div id="viewer" tabindex="0" role="tabpanel" aria-label="Diagram. Drag to pan, Control or Command plus scroll to zoom. Select a node or arrow to trace it."></div>
+  <footer id="version" aria-label="Application version">Version <time id="build-date"></time></footer>
   <div id="status" role="status">Rendering diagram...</div>
   <div id="error" role="alert" hidden></div>
   <dialog id="source-dialog">
@@ -51,6 +52,16 @@ function get<K extends keyof HTMLElementTagNameMap>(id: string, tag: K): HTMLEle
   return item as HTMLElementTagNameMap[K];
 }
 
+const builtAt = import.meta.env.VITE_BUILD_DATE;
+if (builtAt) {
+  const date = get('build-date', 'time');
+  date.dateTime = builtAt;
+  date.textContent = `${builtAt.slice(0, 19).replace('T', ' ')} UTC`;
+  date.title = `Production build: ${builtAt}`;
+} else {
+  get('version', 'footer').textContent = 'Development build';
+}
+
 const source = get('source', 'textarea');
 const dialog = get('source-dialog', 'dialog');
 const original = get('original', 'input');
@@ -63,7 +74,7 @@ const svgButton = get('svg', 'button');
 const pngButton = get('png', 'button');
 const tabs = get('tabs', 'div');
 const themeButton = get('theme', 'button');
-const engine = new ELK({ workerFactory: () => new Worker(workerUrl) });
+let engine: InstanceType<typeof ELK> | undefined;
 const measure = browserMeasure();
 const viewport = new Viewport(viewer, scale => { get('zoom', 'span').textContent = `${Math.round(scale * 100)}%`; });
 const workspaceStorageKey = 'mermaid-studio-workspace-v1';
@@ -77,7 +88,7 @@ let selected: Selection;
 let revision = 0;
 let renderedRevision = -1;
 let running = false;
-let cache: { key: string; layout: DiagramLayout } | undefined;
+let cache: { tabId: string; source: string; automatic: boolean; layout: DiagramLayout } | undefined;
 let editAfterRender: string | undefined;
 
 function message(error: unknown): string {
@@ -120,13 +131,12 @@ function loadWorkspace(): Workspace {
 }
 
 let workspace = loadWorkspace();
-const initialTab = activeTab(workspace);
-let pending = {
-  tabId: initialTab.id,
-  source: initialTab.source,
-  original: initialTab.original,
-  automatic: initialTab.automatic,
-};
+let pending = (() => {
+  const item = activeTab(workspace);
+  return { tabId: item.id, source: item.source, original: item.original, automatic: item.automatic };
+})();
+let persistedWorkspace: Workspace | undefined;
+let displayedWorkspace: Workspace | undefined;
 const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
 const savedTheme = readStorage(themeStorageKey);
 if (savedTheme !== null && savedTheme !== 'light' && savedTheme !== 'dark') {
@@ -160,8 +170,11 @@ function writeStorage(key: string, value: string): void {
 }
 
 function persistWorkspace(): void {
+  if (!storageAvailable) { persistedWorkspace = undefined; return; }
+  if (workspace === persistedWorkspace) return;
   writeStorage(workspaceStorageKey, encodeWorkspace(workspace));
   writeStorage(legacyStorageKey, activeTab(workspace).source);
+  persistedWorkspace = storageAvailable ? workspace : undefined;
 }
 
 function applyTheme(next: Theme, persist = false): void {
@@ -183,6 +196,7 @@ function tabLabel(item: DiagramTab, index: number): string {
 }
 
 function renderTabs(): void {
+  if (workspace === displayedWorkspace) return;
   const focusedId = document.activeElement instanceof HTMLButtonElement
     ? document.activeElement.dataset.tabId
     : undefined;
@@ -213,6 +227,7 @@ function renderTabs(): void {
     wrapper.append(button, close);
     return wrapper;
   }));
+  displayedWorkspace = workspace;
   if (focusedId) focusTab(focusedId);
 }
 
@@ -255,6 +270,7 @@ function addDiagramTab(sourceValue = newDiagramSource, edit = false): DiagramTab
 function closeDiagramTab(id: string): void {
   const wasActive = id === workspace.activeId;
   if (editAfterRender === id) editAfterRender = undefined;
+  if (cache?.tabId === id) cache = undefined;
   workspace = closeTab(workspace, id);
   renderTabs();
   persistWorkspace();
@@ -298,7 +314,8 @@ async function render(): Promise<void> {
   const token = revision;
   const input = pending;
   try {
-    const graph = await parseSource(input.source);
+    const cached = cache?.source === input.source && cache.automatic === input.automatic ? cache.layout : undefined;
+    const graph = cached?.graph ?? await parseSource(input.source);
     if (token !== revision) return;
     let next: SVGSVGElement;
     let nextLayout: DiagramLayout | undefined;
@@ -313,13 +330,14 @@ async function render(): Promise<void> {
       next = candidate;
       next.dataset.renderer = 'native';
     } else {
-      const key = JSON.stringify([input.source, input.automatic]);
-      if (cache?.key !== key) {
-        const positioned = await layoutGraph(graph, engine, { automatic: input.automatic, detail: true, measure });
+      let positioned = cached;
+      if (!positioned) {
+        engine ??= new ELK({ workerFactory: () => new Worker(workerUrl) });
+        positioned = await layoutGraph(graph, engine, { automatic: input.automatic, detail: true, measure });
         if (token !== revision) return;
-        cache = { key, layout: positioned };
+        cache = { tabId: input.tabId, source: input.source, automatic: input.automatic, layout: positioned };
       }
-      nextLayout = cache.layout;
+      nextLayout = positioned;
       next = renderDiagram(nextLayout, select);
     }
     if (token !== revision) return;
@@ -339,8 +357,11 @@ async function render(): Promise<void> {
     next.style.backgroundColor = graph.background;
     viewport.set(next);
     if (dialog.open) dialog.close();
+    source.value = '';
     errorBox.hidden = true;
+    errorBox.textContent = '';
     sourceError.hidden = true;
+    sourceError.textContent = '';
     svgButton.disabled = false;
     pngButton.disabled = native;
     pngButton.title = native ? 'Use SVG export for native Mermaid diagrams.' : 'Export the complete diagram as PNG';
@@ -367,6 +388,7 @@ async function render(): Promise<void> {
 
 function cancelEdit(): void {
   if (dialog.open) dialog.close();
+  source.value = '';
   sourceError.hidden = true;
   errorBox.hidden = true;
   if (renderedRevision !== revision) {
@@ -450,9 +472,9 @@ pngButton.addEventListener('click', async () => {
   finally { pngButton.disabled = renderedRevision !== revision || svg?.dataset.renderer === 'native'; }
 });
 window.addEventListener('pagehide', event => {
-  if (!event.persisted) { viewport.destroy(); engine.terminateWorker(); }
+  if (!event.persisted) { viewport.destroy(); engine?.terminateWorker(); }
 });
 applyTheme(theme);
 renderTabs();
 refreshStatus();
-request(initialTab.source, initialTab.original, initialTab.automatic, initialTab.id);
+request(pending.source, pending.original, pending.automatic, pending.tabId);

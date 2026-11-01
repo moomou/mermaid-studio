@@ -40,6 +40,15 @@ test('closing tabs keeps the current tab or selects the nearest surviving tab', 
   assert.throws(() => closeTab(workspace, 'three'), /At least one/);
 });
 
+test('unchanged render metadata does not invalidate workspace persistence', () => {
+  const workspace = createWorkspace('flowchart LR\nA --> B', 'one');
+  assert.equal(updateTab(workspace, 'one', { ...workspace.tabs[0] }), workspace);
+  const changed = updateTab(workspace, 'one', { automatic: false });
+  assert.notEqual(changed, workspace);
+  assert.equal(changed.tabs[0].automatic, false);
+  assert.equal(workspace.tabs[0].automatic, true);
+});
+
 test('invalid saved workspaces fail explicitly', () => {
   assert.throws(() => decodeWorkspace('{'), /valid JSON/);
   assert.throws(() => decodeWorkspace('{"version":1,"activeId":"one","tabs":[]}'), /invalid format/);
