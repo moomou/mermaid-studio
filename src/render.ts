@@ -1,6 +1,7 @@
 import type { Box, DiagramLayout, Paint, Point, PositionedNode } from './model.ts';
 import { edgeDescription } from './layout.ts';
 import { nodePolygon } from './geometry.ts';
+import { EDGE_FONT_SIZE, EDGE_LINE_HEIGHT, NODE_FONT_SIZE, NODE_LINE_HEIGHT } from './text.ts';
 
 const SVG = 'http://www.w3.org/2000/svg';
 
@@ -95,17 +96,19 @@ export function renderDiagram(layout: DiagramLayout, select: (selection: Selecti
     xmlns: SVG, width: layout.width, height: layout.height,
     viewBox: `0 0 ${layout.width} ${layout.height}`, role: 'group',
     'aria-label': layout.graph.title, 'data-renderer': 'structured',
+    'data-layout': layout.sections.length > 1 ? 'regions' : 'compact',
     'data-node-count': layout.graph.nodes.length, 'data-edge-count': layout.graph.edges.length,
   });
   svg.append(element('title', {}, layout.graph.title));
-  svg.append(element('desc', {}, `${layout.graph.description}\n${layout.structure.sections.length} regions. Every node, declared boundary, and visible connection is drawn. Region numbers suggest a reading order, not execution timing. Select a node or arrow to trace its connections. No steps are collapsed.`));
+  const guidance = layout.sections.length > 1 ? `${layout.sections.length} reading regions. Region numbers suggest a reading order, not execution timing.` : 'Compact connected layout.';
+  svg.append(element('desc', {}, `${layout.graph.description}\n${guidance} Every node, declared boundary, and visible connection is drawn. Select a node or arrow to trace its connections. No steps are collapsed.`));
   const defs = element('defs');
   defs.append(element('style', {}, `
     text { font-family: Arial, sans-serif; fill: #192a26; }
-    .node-label, .node-detail { font-size: 12.5px; font-weight: 400; }
+    .node-label, .node-detail { font-size: ${NODE_FONT_SIZE}px; font-weight: 400; }
     .group-label { font-size: 16px; fill: #283931; paint-order: stroke; stroke-width: 4px; stroke-linejoin: round; }
     .section-title { font-size: 13px; fill: #667771; }
-    .edge-label { font-size: 10px; fill: #354b43; }
+    .edge-label { font-size: ${EDGE_FONT_SIZE}px; fill: #354b43; }
     [role="button"] { cursor: pointer; outline: none; }
     .node:focus > .node-outline, .node:hover > .node-outline { stroke: #287d80; stroke-width: 2; }
     .is-dimmed { opacity: .28; }
@@ -125,7 +128,9 @@ export function renderDiagram(layout: DiagramLayout, select: (selection: Selecti
     defs.append(mark);
   }
   svg.append(defs, rectangle({ x: 0, y: 0, width: layout.width, height: layout.height }, { fill: paper }));
-  svg.append(element('text', { x: layout.width / 2, y: 29, 'text-anchor': 'middle', 'font-size': 20, 'font-weight': 500 }, layout.graph.title));
+  layout.titleLines.forEach((line, index) => svg.append(element('text', {
+    x: layout.width / 2, y: 28 + index * 24, 'text-anchor': 'middle', 'font-size': 20, 'font-weight': 500,
+  }, line)));
   const captions = element('g', { 'pointer-events': 'none', 'aria-hidden': 'true' });
 
   for (const region of layout.sections) {
@@ -135,9 +140,12 @@ export function renderDiagram(layout: DiagramLayout, select: (selection: Selecti
       rx: 9, 'stroke-dasharray': '6 6',
       ...paintAttributes(declared.group.paint, { fill: 'none', stroke: '#adbcb0' }),
     }));
-    group.append(element('text', { x: region.x + 12, y: region.y + 25, 'font-size': 11, fill: '#667771' }, String(region.section.index + 1).padStart(2, '0')));
+    const guided = layout.sections.length > 1;
+    if (guided) group.append(element('text', { x: region.x + 12, y: region.y + 25, 'font-size': 11, fill: '#667771' }, String(region.section.index + 1).padStart(2, '0')));
     region.lines.forEach((line, index) => group.append(element('text', {
-      x: region.x + 37, y: region.y + 25 + index * 17, class: 'section-title',
+      x: region.x + (guided ? 37 : 12), y: region.y + 25 + index * (guided ? 17 : 19),
+      class: guided ? 'section-title' : 'group-label',
+      ...(!guided && declared?.group.paint.color ? { style: `fill:${declared.group.paint.color}` } : {}),
     }, line)));
     if (declared) {
       group.dataset.entity = declared.group.id;
@@ -189,7 +197,7 @@ export function renderDiagram(layout: DiagramLayout, select: (selection: Selecti
       const caption = element('g', { 'data-label-for': edge.id });
       caption.append(rectangle(label, { rx: 2, fill: paper, 'fill-opacity': 0.97 }));
       label.lines.forEach((text, index) => caption.append(element('text', {
-        x: label.x + label.width / 2, y: label.y + 12 + index * 13, 'text-anchor': 'middle', class: 'edge-label',
+        x: label.x + label.width / 2, y: label.y + EDGE_FONT_SIZE + 2 + index * EDGE_LINE_HEIGHT, 'text-anchor': 'middle', class: 'edge-label',
         ...(edge.paint.color ? { style: `fill:${edge.paint.color}` } : {}),
       }, text)));
       labels.append(caption);
@@ -216,8 +224,8 @@ export function renderDiagram(layout: DiagramLayout, select: (selection: Selecti
     const shapes = nodeShape(box, paint);
     shapes[0].classList.add('node-outline');
     group.append(...shapes);
-    const textHeight = box.lines.length * 14;
-    let baseline = box.y + (box.height - textHeight) / 2 + 11;
+    const textHeight = box.lines.length * NODE_LINE_HEIGHT;
+    let baseline = box.y + (box.height - textHeight) / 2 + NODE_FONT_SIZE;
     if (box.node.shape === 'cylinder') baseline += 3;
     for (const line of box.lines) {
       group.append(element('text', {
@@ -225,7 +233,7 @@ export function renderDiagram(layout: DiagramLayout, select: (selection: Selecti
         class: line.secondary ? 'node-detail' : 'node-label',
         ...(box.node.paint.color ? { style: `fill:${box.node.paint.color}` } : {}),
       }, line.text));
-      baseline += 14;
+      baseline += NODE_LINE_HEIGHT;
     }
     group.append(element('title', {}, box.node.label || box.node.id));
     if (!box.node.link) interactive(group, box.node.label || box.node.id, () => select({ kind: 'node', id: box.node.id }));

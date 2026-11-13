@@ -126,4 +126,5 @@ export interface DiagramLayout {
   width: number;
   height: number;
   detail: boolean;
+  titleLines: string[];
 }

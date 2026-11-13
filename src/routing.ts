@@ -1,6 +1,6 @@
 import type { Box, DiagramLayout, Point, PositionedEdge } from './model.ts';
 import { clipRoute } from './geometry.ts';
-import { wrapText } from './text.ts';
+import { EDGE_FONT_SIZE, EDGE_LINE_HEIGHT, wrapText } from './text.ts';
 import type { MeasureText } from './text.ts';
 
 interface Port {
@@ -287,9 +287,9 @@ class GridRouter {
 
 function labelOnRoute(edge: PositionedEdge, blocked: Box[], measure: MeasureText): void {
   if (!edge.edge.label) return;
-  const lines = wrapText(edge.edge.label, 92, 10, measure);
-  const width = Math.max(...lines.map(line => measure(line, 10))) + 10;
-  const height = lines.length * 13 + 4;
+  const lines = wrapText(edge.edge.label, 128, EDGE_FONT_SIZE, measure);
+  const width = Math.max(...lines.map(line => measure(line, EDGE_FONT_SIZE))) + 10;
+  const height = lines.length * EDGE_LINE_HEIGHT + 4;
   const segments = edge.paths.flatMap(points => points.slice(1).map((b, index) => ({ a: points[index], b })));
   segments.sort((a, b) => (Math.hypot(b.b.x - b.a.x, b.b.y - b.a.y)) - Math.hypot(a.b.x - a.a.x, a.b.y - a.a.y));
   for (const offset of [0, 1, -1]) for (const { a, b } of segments) {

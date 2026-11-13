@@ -26,8 +26,13 @@ from the monorepo root. There is no backend, account, AI service, Java runtime,
 or Eclipse IDE requirement.
 
 The tab strip keeps multiple diagrams open locally. Use **+** for a new diagram,
-**Open** to import a `.mmd` file into its own tab, and the close control on each
-tab to remove it. Tabs, sources, layout choices, the active tab, and the
+**Open** to import a `.mmd`, `.mermaid`, or Markdown (`.md`, `.markdown`, `.mdown`)
+file, and the close control on each tab to remove it. Every fenced `mermaid`
+block in a Markdown document opens in its own tab, in document order; the first
+is selected. Prose and other code blocks are ignored. Backtick and tilde fences,
+including fences in lists and blockquotes, are supported. All blocks are checked
+before any tabs are added, so a bad block cannot cause a partial import.
+Tabs, sources, layout choices, the active tab, and the
 light/dark appearance are restored on the next visit.
 
 The toolbar also provides source input, SVG/PNG export, zoom, fit, and a
@@ -45,16 +50,25 @@ shown by default; details are not reduced to smaller, fainter text.
 The pinned, official Mermaid parser handles syntax and produces an owned graph
 snapshot. It is not a regex reimplementation of the grammar.
 
-1. Declared outer subgraphs become indivisible units during region inference.
+1. A compact, connected layout is compared with a reading-region layout. Canvas
+   proportions, overall extent, wire length, and bends guide the choice. Extra
+   regions must provide a substantial improvement, rather than splitting a
+   simple branch or hub merely to reach a region-count target.
+2. Declared outer subgraphs become indivisible units during region inference.
    Their nested boundaries are retained.
-2. Weighted connectivity merges related units. Dotted edges have less influence
+3. Weighted connectivity merges related units. Dotted edges have less influence
    than solid edges. Disconnected components are not merged merely to hit a
    region-count target.
-3. An independently rooted subgraph stays separate when outside control links
+4. An independently rooted subgraph stays separate when outside control links
    only join it downstream of its entry.
-4. Each region gets a compact local layout. Cross-region connections are then
+5. Each region gets a compact local layout. Cross-region connections are then
    routed around nodes and captions, so return links do not distort the main
    flow. Every visible source edge is an actual drawn connection.
+
+Simple charts have no invented headings, numbering, or placeholder diagram
+title. Nodes use the same 16-pixel text size as standard Mermaid, with smaller
+natural boxes and shape-aware label wrapping. Depth-first cycle breaking favors
+the authored forward reading spine instead of promoting feedback destinations.
 
 Parallel cross-region routes reserve 14 SVG units of clearance and stay 10 units
 away from parallel group borders. Shared destinations get separate arrival
@@ -88,8 +102,9 @@ preserved. Absolute HTTP(S) and mailto links are supported; JavaScript callbacks
 and relative links are disabled. Invisible edges constrain local layout but do
 not invent visible connections or determine region membership.
 
-Other diagram types, unsupported modern shapes, image/icon nodes, and animated
-edges use native Mermaid rendering, with an explicit explanation. Native
+Other diagram types, unsupported modern shapes, image/icon nodes, animated
+edges, and layouts that cannot safely place every connection use native
+Mermaid rendering, with an explicit explanation. Native
 diagrams support SVG export; PNG export is for the structured view.
 
 ## Reference and comparison
@@ -107,22 +122,43 @@ prove an aesthetic or comprehension improvement.
 The sample is in `src/examples.ts`; use **Source > Save .mmd** for the exact
 source currently being rendered.
 
+The repeatable comparison corpus contains 40 cases: all four flow directions,
+simple branches, cycles, self-loops, parallel edges, disconnected components,
+hubs, dense layers, nested groups, group endpoints, long labels, Chinese labels,
+styles, and nine native-rendering cases. Run the dev server and open
+`http://127.0.0.1:4381/tests/visual.html` for side-by-side standard Mermaid and
+Studio rendering from identical source. The gallery deliberately uses equal
+panel sizes; fitted node-label size is supporting evidence, not an aesthetic
+score or a claim that every possible diagram is better.
+
+With `agent-browser` installed, capture all comparisons and check actual uploads,
+exports, fallback, persistence, and mobile behavior:
+
+```sh
+node --experimental-strip-types tests/compare-rendering.mjs http://127.0.0.1:4381 /tmp/mermaid-comparisons
+node tests/check-ui.mjs http://127.0.0.1:4381 /tmp/mermaid-ui-check
+```
+
+Both commands run sequentially in isolated browser sessions and close them on
+completion, including failures.
+
 ## Limits and privacy
 
 There is a 50,000-character source limit, a 500-edge parser limit, and a
-200-node/group structured-layout limit. Invalid edits show an error and retain
+200-node/group structured-layout limit. Imported files are limited to 200 KB
+and 50 Mermaid blocks per Markdown file. Invalid edits show an error and retain
 the previous diagram, with image exports paused until corrected or cancelled.
 Queued renders cannot replace a newer edit with stale output.
 The separated-route grid is capped at 160,000 points; excessively dense layouts
-report an explicit error and can be viewed with the original Mermaid layout.
+use a safe connected layout or fall back to original Mermaid with an explanation.
 
 Only one structured layout is cached, and closing its tab releases that cache.
 Unchanged renders reuse the parsed graph without rewriting browser storage.
 Native-only sessions do not start an ELK worker. Routing reuses grid-search
 scratch buffers across connections within the grid limit.
 
-Successfully rendered tabs and the selected appearance are saved in local
-browser storage. No diagram source is uploaded. External assets explicitly
+Imported tabs, successfully rendered edits, and the selected appearance are saved
+in local browser storage. No diagram source is uploaded. External assets explicitly
 referenced by a native Mermaid diagram may still be requested by Mermaid.
 
 Exports contain the complete diagram, not the current pan/zoom crop or selection
@@ -153,6 +189,7 @@ labelled **Development build**, rather than displaying a deployment date.
 | Module | Responsibility |
 | --- | --- |
 | `src/parser.ts` | Serialized Mermaid parsing, safe source appearance, graph snapshots |
+| `src/import.ts` | Markdown fence extraction without rendering document HTML |
 | `src/structure.ts` | Deterministic topology-based regions, preservation of declared boundaries |
 | `src/layout.ts` / `src/geometry.ts` | Local layout, natural sizing, shape intersections |
 | `src/routing.ts` | Actual cross-region arrows and label placement |
@@ -161,5 +198,5 @@ labelled **Development build**, rather than displaying a deployment date.
 | `src/export.ts` | Complete SVG and bounded PNG output |
 
 The layout accepts an injected engine and text-measurement function; graph
-inference is independent of the viewer UI. Mermaid is MIT-licensed and ELK.js is
-EPL-2.0-licensed.
+inference is independent of the viewer UI. Mermaid and Marked are MIT-licensed;
+ELK.js is EPL-2.0-licensed.

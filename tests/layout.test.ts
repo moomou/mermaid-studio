@@ -8,8 +8,9 @@ import { buildStructure } from '../src/structure.ts';
 import { layoutGraph } from '../src/layout.ts';
 import { BOUNDARY_ROUTE_GAP, CROSS_ROUTE_GAP, routeConnections } from '../src/routing.ts';
 import { renderDiagram } from '../src/render.ts';
-import { wrapText, approximateMeasure } from '../src/text.ts';
+import { wrapText, approximateMeasure, NODE_FONT_SIZE } from '../src/text.ts';
 import type { Box, DiagramLayout, FlowGraph, Point } from '../src/model.ts';
+import { renderingCases } from './fixtures/rendering-cases.ts';
 
 const engine = new ELK();
 
@@ -66,7 +67,7 @@ function assertLayout(layout: DiagramLayout): void {
   for (const group of layout.groups.filter(group => group.depth >= 0)) {
     for (const line of group.lines) assert.ok(approximateMeasure(line, 16) <= group.width - 20, 'Group titles fit their boundary');
   }
-  for (const route of layout.edges) {
+  for (const route of layout.edges.filter(edge => edge.edge.stroke !== 'invisible')) {
     for (const points of route.paths) for (let i = 1; i < points.length; i++) {
       const a = points[i - 1];
       const b = points[i];
@@ -140,7 +141,7 @@ test('all shipped flowcharts preserve graph entities and non-overlapping geometr
 
 test('cross-region routing uses bounded scratch memory without changing routes', async () => {
   const input = await graph(examples[0].source);
-  const layout = await layoutGraph(input, engine, { automatic: true, detail: true });
+  const layout = await layoutGraph(input, engine, { automatic: true, detail: true, strategy: 'regions' });
   const expected = layout.edges.filter(edge => edge.crossSection);
   layout.edges = layout.edges.filter(edge => !edge.crossSection);
   let allocatedBytes = 0;
@@ -182,7 +183,7 @@ test('declared-only grouping, cycles, self-loops, parallel edges, disconnected n
     end
     B --> C
   `);
-  const layout = await layoutGraph(input, engine, { automatic: false, detail: true });
+  const layout = await layoutGraph(input, engine, { automatic: false, detail: true, strategy: 'regions' });
   assertLayout(layout);
   assert.equal(layout.groups.length, 3);
   assert.equal(layout.structure.sections.length, 3);
@@ -229,7 +230,7 @@ test('multiple arrows retain a subgraph endpoint with a long title', async () =>
     end
     cluster --> C & D & E & F & G & H
   `);
-  const layout = await layoutGraph(input, engine, { automatic: false, detail: true });
+  const layout = await layoutGraph(input, engine, { automatic: false, detail: true, strategy: 'regions' });
   assertLayout(layout);
   assert.equal(layout.edges.filter(edge => edge.crossSection).length, 6);
 });
@@ -255,7 +256,7 @@ test('the complete deployment diagram stays compact without collapsed steps or r
   const input = await graph(examples[0].source);
   const layout = await layoutGraph(input, engine, { automatic: true, detail: true });
   const referenceScale = Math.min(1968 / layout.width, 1330 / layout.height, 1);
-  assert.ok(12.5 * referenceScale >= 11, 'Full labels remain readable at the supplied reference image size');
+  assert.ok(NODE_FONT_SIZE * referenceScale >= 11, 'Full labels remain readable at the supplied reference image size');
   assert.equal(layout.edges.length, 26);
   assert.equal(layout.nodes.length, 24);
   for (const node of layout.nodes) {
@@ -264,7 +265,7 @@ test('the complete deployment diagram stays compact without collapsed steps or r
 });
 
 test('dashed return paths have real spacing and separate arrival points', async () => {
-  const layout = await layoutGraph(await graph(examples[0].source), engine, { automatic: true, detail: true });
+  const layout = await layoutGraph(await graph(examples[0].source), engine, { automatic: true, detail: true, strategy: 'regions' });
   const returns = layout.edges.filter(edge => edge.crossSection && edge.edge.stroke === 'dotted');
   assert.equal(returns.length, 3);
   const arrivals = returns.map(edge => edge.paths.at(-1)!.at(-1)!);
@@ -286,4 +287,65 @@ test('dashed return paths have real spacing and separate arrival points', async 
       }
     }
   }
+});
+
+test('adaptive layouts preserve readable geometry across the comparison corpus in both grouping modes', async () => {
+  for (const example of renderingCases) {
+    const input = await parseSource(example.source);
+    if (input.kind !== 'flowchart') continue;
+    for (const automatic of [true, false]) {
+      const layout = await layoutGraph(input, engine, { automatic, detail: true });
+      assertLayout(layout);
+      for (const node of layout.nodes) {
+        assert.equal(node.lines.map(line => line.text).join('').replace(/\s/g, ''), node.node.label.replace(/\s/g, ''), example.id);
+      }
+    }
+  }
+});
+
+test('simple and disconnected diagrams do not acquire artificial reading regions or placeholder headings', async () => {
+  const ids = ['chain-tb', 'chain-lr', 'branch-tb', 'branch-lr', 'disconnected', 'fan-out', 'fan-in', 'dense-layers', 'group-endpoints'];
+  for (const id of ids) {
+    const input = await graph(renderingCases.find(example => example.id === id)!.source);
+    const layout = await layoutGraph(input, engine, { automatic: true, detail: true });
+    assert.equal(layout.sections.length, 1, id);
+    const svg = renderDiagram(layout, () => {});
+    assert.equal(svg.querySelectorAll('.section-title').length, 0, id);
+    assert.equal([...svg.querySelectorAll('text')].some(text => text.textContent === 'Untitled diagram'), false, id);
+  }
+});
+
+test('compound group headers fit in every source direction without transposed minimum dimensions', async () => {
+  for (const direction of ['TB', 'BT', 'LR', 'RL']) {
+    const input = await graph(`flowchart ${direction}
+      subgraph cluster[A long declared group title that wraps across multiple header lines]
+        A --> B
+      end
+      cluster --> C & D
+    `);
+    const layout = await layoutGraph(input, engine, { automatic: true, detail: true });
+    assertLayout(layout);
+  }
+});
+
+test('cycles retain the authored forward spine without reversing reverse-declared acyclic chains', async () => {
+  const cycle = renderingCases.find(example => example.id === 'cycle')!.source;
+  for (const source of [cycle, 'flowchart LR\nC[Finish]\nB[Middle]\nA[Start]\nA --> B --> C']) {
+    const layout = await layoutGraph(await graph(source), engine, { automatic: true, detail: true });
+    const x = (id: string) => layout.nodes.find(node => node.node.id === id)!.x;
+    assert.ok(x('A') < x('B') && x('B') < x('C'));
+    if (source === cycle) assert.ok(x('C') < x('D'));
+    assertLayout(layout);
+  }
+});
+
+test('reading regions improve fitting on wide canvases without forcing them onto portrait canvases', async () => {
+  const input = await graph(examples.find(example => example.id === 'data')!.source);
+  const wide = await layoutGraph(input, engine, { automatic: true, detail: true, aspectRatio: 2 });
+  const portrait = await layoutGraph(input, engine, { automatic: true, detail: true, aspectRatio: 0.5 });
+  assert.ok(wide.sections.length > 1);
+  assert.equal(portrait.sections.length, 1);
+  assert.ok(Math.min(760 / wide.width, 390 / wide.height) > Math.min(760 / portrait.width, 390 / portrait.height) * 1.3);
+  assertLayout(wide);
+  assertLayout(portrait);
 });

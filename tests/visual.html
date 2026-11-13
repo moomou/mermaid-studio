@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mermaid rendering comparisons</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #edf1f3; color: #233b35; font: 14px Arial, sans-serif; }
+      header { padding: 14px 20px; background: #fff; border-bottom: 1px solid #ccd6d2; }
+      h1 { margin: 0 0 6px; font-size: 19px; }
+      header p { margin: 0; font-size: 12px; }
+      article { margin: 12px; }
+      h2 { margin: 0; padding: 8px; background: #dce5e2; font-size: 14px; }
+      .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: #ccd6d2; }
+      .panel { min-width: 0; background: #fff; }
+      .caption { height: 34px; padding: 9px 12px; font-size: 12px; }
+      .drawing { height: 390px; position: relative; overflow: hidden; }
+      .drawing > svg { position: absolute; transform-origin: 0 0; max-width: none !important; }
+      .failure { padding: 20px; color: #a22d22; white-space: pre-wrap; }
+      #mount { position: fixed; left: -20000px; top: 0; width: 2000px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Same source, standard Mermaid vs. Mermaid Studio</h1>
+      <p>Identical panel sizes; all labels and connections retained. Open with ?case=case-id or call renderComparisons([...ids]).</p>
+    </header>
+    <main id="comparisons"></main>
+    <div id="mount"></div>
+    <script type="module" src="./visual.ts"></script>
+  </body>
+</html>

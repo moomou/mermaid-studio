@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  activateTab, activeTab, addTab, closeTab, createWorkspace, decodeWorkspace,
+  activateTab, activeTab, addTab, addTabs, closeTab, createWorkspace, decodeWorkspace,
   encodeWorkspace, oppositeTheme, resolveTheme, updateTab,
 } from '../src/workspace.ts';
 
@@ -38,6 +38,19 @@ test('closing tabs keeps the current tab or selects the nearest surviving tab', 
   workspace = closeTab(workspace, 'two');
   assert.equal(workspace.activeId, 'three');
   assert.throws(() => closeTab(workspace, 'three'), /At least one/);
+});
+
+test('bulk imports retain every source and validate all identifiers before changing the workspace', () => {
+  const workspace = createWorkspace('flowchart LR\nA --> B', 'one');
+  const items = ['two', 'three'].map(id => ({
+    id, title: id, source: `flowchart LR\n${id} --> Result`, original: false, automatic: true,
+  }));
+  const imported = activateTab(addTabs(workspace, items), 'two');
+  assert.deepEqual(imported.tabs.slice(1), items);
+  assert.equal(imported.activeId, 'two');
+  assert.equal(workspace.tabs.length, 1);
+  assert.throws(() => addTabs(workspace, [items[0], items[0]]), /identifier already exists/);
+  assert.equal(addTabs(workspace, []), workspace);
 });
 
 test('unchanged render metadata does not invalidate workspace persistence', () => {

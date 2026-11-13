@@ -10,8 +10,9 @@ import type { DiagramLayout } from './model.ts';
 import { browserMeasure } from './text.ts';
 import { Viewport } from './viewport.ts';
 import { download, exportSvg, filename, pngBlob } from './export.ts';
+import { diagramSources, MAX_IMPORT_BYTES } from './import.ts';
 import {
-  activateTab, activeTab, addTab, closeTab, createWorkspace, decodeWorkspace, encodeWorkspace,
+  activateTab, activeTab, addTab, addTabs, closeTab, createWorkspace, decodeWorkspace, encodeWorkspace,
   oppositeTheme, resolveTheme, updateTab,
 } from './workspace.ts';
 import type { DiagramTab, Theme, Workspace } from './workspace.ts';
@@ -23,7 +24,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button id="new-tab" aria-label="New diagram" title="New diagram">+</button>
     </div>
     <div id="tools" role="toolbar" aria-label="Graph controls">
-      <button id="edit">Source</button><button id="open">Open</button><span class="divider"></span>
+      <button id="edit">Source</button><button id="open" title="Open a Mermaid or Markdown file">Open</button><span class="divider"></span>
       <button id="svg" disabled>SVG</button><button id="png" disabled>PNG</button><span class="divider"></span>
       <button id="zoom-out" aria-label="Zoom out">&minus;</button><span id="zoom">100%</span><button id="zoom-in" aria-label="Zoom in">+</button><button id="fit">Fit</button><span class="divider"></span>
       <button id="theme">Dark</button>
@@ -42,7 +43,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <div class="dialog-actions"><button type="button" id="save-source">Save .mmd</button><span></span><button type="button" id="cancel">Cancel</button><button type="submit" class="primary">Render</button></div>
     </form>
   </dialog>
-  <input id="file" type="file" accept=".mmd,.mermaid,.txt" hidden />
+  <input id="file" type="file" accept=".mmd,.mermaid,.md,.markdown,.mdown,.txt" hidden />
   <div id="native-mount" aria-hidden="true"></div>
 `;
 
@@ -88,7 +89,7 @@ let selected: Selection;
 let revision = 0;
 let renderedRevision = -1;
 let running = false;
-let cache: { tabId: string; source: string; automatic: boolean; layout: DiagramLayout } | undefined;
+let cache: { tabId: string; source: string; automatic: boolean; aspectRatio: number; layout: DiagramLayout } | undefined;
 let editAfterRender: string | undefined;
 
 function message(error: unknown): string {
@@ -314,12 +315,30 @@ async function render(): Promise<void> {
   const token = revision;
   const input = pending;
   try {
-    const cached = cache?.source === input.source && cache.automatic === input.automatic ? cache.layout : undefined;
+    const aspectRatio = viewer.clientWidth / Math.max(1, viewer.clientHeight);
+    const cached = cache?.source === input.source && cache.automatic === input.automatic
+      && cache.aspectRatio === aspectRatio ? cache.layout : undefined;
     const graph = cached?.graph ?? await parseSource(input.source);
     if (token !== revision) return;
     let next: SVGSVGElement;
     let nextLayout: DiagramLayout | undefined;
-    const native = input.original || graph.kind === 'native';
+    let native = input.original || graph.kind === 'native';
+    let fallback = '';
+    if (!native && graph.kind === 'flowchart') {
+      try {
+        nextLayout = cached;
+        if (!nextLayout) {
+          engine ??= new ELK({ workerFactory: () => new Worker(workerUrl) });
+          nextLayout = await layoutGraph(graph, engine, { automatic: input.automatic, detail: true, measure, aspectRatio });
+          if (token !== revision) return;
+          cache = { tabId: input.tabId, source: input.source, automatic: input.automatic, aspectRatio, layout: nextLayout };
+        }
+      } catch (error) {
+        if (token !== revision) return;
+        native = true;
+        fallback = `Structured layout could not keep this diagram clear: ${message(error)} Showing the original Mermaid layout instead.`;
+      }
+    }
     if (native) {
       const markup = await renderNative(input.source, get('native-mount', 'div'));
       if (token !== revision) return;
@@ -330,14 +349,7 @@ async function render(): Promise<void> {
       next = candidate;
       next.dataset.renderer = 'native';
     } else {
-      let positioned = cached;
-      if (!positioned) {
-        engine ??= new ELK({ workerFactory: () => new Worker(workerUrl) });
-        positioned = await layoutGraph(graph, engine, { automatic: input.automatic, detail: true, measure });
-        if (token !== revision) return;
-        cache = { tabId: input.tabId, source: input.source, automatic: input.automatic, layout: positioned };
-      }
-      nextLayout = positioned;
+      if (!nextLayout) throw new Error('No structured layout was produced.');
       next = renderDiagram(nextLayout, select);
     }
     if (token !== revision) return;
@@ -367,7 +379,7 @@ async function render(): Promise<void> {
     pngButton.title = native ? 'Use SVG export for native Mermaid diagrams.' : 'Export the complete diagram as PNG';
     renderTabs();
     persistWorkspace();
-    notify(graph.kind === 'native' ? graph.reason : graph.warnings.join(' '));
+    notify(graph.kind === 'native' ? graph.reason : [fallback, ...graph.warnings].filter(Boolean).join(' '));
     if (editAfterRender === input.tabId) {
       editAfterRender = undefined;
       queueMicrotask(showSource);
@@ -440,12 +452,33 @@ get('open', 'button').addEventListener('click', () => get('file', 'input').click
 get('file', 'input').addEventListener('change', async event => {
   const input = event.currentTarget;
   if (!(input instanceof HTMLInputElement) || !input.files?.[0]) return;
+  const file = input.files[0];
+  const open = get('open', 'button');
+  open.disabled = true;
+  notify('Opening diagrams...');
   try {
-    if (input.files[0].size > 200_000) throw new Error('Open a Mermaid source file smaller than 200 KB.');
-    addDiagramTab(await input.files[0].text());
+    if (file.size > MAX_IMPORT_BYTES) throw new Error('Open a Mermaid or Markdown file smaller than 200 KB.');
+    const values = diagramSources(await file.text(), file.name);
+    const items: DiagramTab[] = [];
+    for (const [index, value] of values.entries()) {
+      try {
+        const graph = await parseSource(value);
+        items.push({
+          id: newTabId(), title: graph.title, source: value, original: false, automatic: true,
+        });
+      } catch (error) {
+        throw new Error(`Diagram ${index + 1} in "${file.name}": ${message(error)}`, { cause: error });
+      }
+    }
+    const first = items[0];
+    workspace = activateTab(addTabs(workspace, items), first.id);
+    renderTabs();
+    persistWorkspace();
+    request(first.source, first.original, first.automatic, first.id);
   } catch (error) {
     errorBox.textContent = message(error); errorBox.hidden = false;
-  } finally { input.value = ''; }
+    notify('');
+  } finally { input.value = ''; open.disabled = false; }
 });
 get('save-source', 'button').addEventListener('click', () => download(new Blob([source.value], { type: 'text/plain;charset=utf-8' }), 'diagram.mmd'));
 get('fit', 'button').addEventListener('click', () => viewport.fit());

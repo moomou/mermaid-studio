@@ -84,9 +84,17 @@ export function activateTab(value: Workspace, id: string): Workspace {
 }
 
 export function addTab(value: Workspace, item: DiagramTab): Workspace {
-  if (value.tabs.some(candidate => candidate.id === item.id)) throw new Error('A diagram tab with this identifier already exists.');
-  tab(item, value.tabs.length);
-  return { ...value, activeId: item.id, tabs: [...value.tabs, item] };
+  return addTabs(value, [item]);
+}
+
+export function addTabs(value: Workspace, items: DiagramTab[]): Workspace {
+  const ids = new Set(value.tabs.map(item => item.id));
+  items.forEach((item, index) => {
+    if (ids.has(item.id)) throw new Error('A diagram tab with this identifier already exists.');
+    ids.add(item.id);
+    tab(item, value.tabs.length + index);
+  });
+  return items.length ? { ...value, activeId: items.at(-1)!.id, tabs: [...value.tabs, ...items] } : value;
 }
 
 export function updateTab(value: Workspace, id: string, updates: Partial<Omit<DiagramTab, 'id'>>): Workspace {
