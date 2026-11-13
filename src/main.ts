@@ -6,11 +6,11 @@ import { parseSource, renderNative } from './parser.ts';
 import { layoutGraph } from './layout.ts';
 import { highlightSelection, renderDiagram } from './render.ts';
 import type { Selection } from './render.ts';
-import type { DiagramLayout } from './model.ts';
+import type { DiagramLayout, FlowGraph, NativeDiagram } from './model.ts';
 import { browserMeasure } from './text.ts';
 import { Viewport } from './viewport.ts';
 import { download, exportSvg, filename, pngBlob } from './export.ts';
-import { diagramSources, MAX_IMPORT_BYTES } from './import.ts';
+import { diagramSources, MAX_DOCUMENT_BYTES } from './import.ts';
 import {
   activateTab, activeTab, addTab, addTabs, closeTab, createWorkspace, decodeWorkspace, encodeWorkspace,
   oppositeTheme, resolveTheme, updateTab,
@@ -36,8 +36,8 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <div id="error" role="alert" hidden></div>
   <dialog id="source-dialog">
     <form id="source-form">
-      <label for="source">Mermaid source</label>
-      <textarea id="source" spellcheck="false" wrap="off" aria-label="Mermaid source"></textarea>
+      <label for="source">Mermaid or Markdown source</label>
+      <textarea id="source" spellcheck="false" wrap="off" aria-label="Mermaid or Markdown source" placeholder="Paste Mermaid syntax or Markdown containing fenced mermaid blocks."></textarea>
       <div class="source-options"><label><input id="original" type="checkbox" /> Original Mermaid layout</label><label><input id="automatic" type="checkbox" checked /> Infer regions</label></div>
       <pre id="source-error" hidden></pre>
       <div class="dialog-actions"><button type="button" id="save-source">Save .mmd</button><span></span><button type="button" id="cancel">Cancel</button><button type="submit" class="primary">Render</button></div>
@@ -316,10 +316,36 @@ async function render(): Promise<void> {
   const input = pending;
   try {
     const aspectRatio = viewer.clientWidth / Math.max(1, viewer.clientHeight);
-    const cached = cache?.source === input.source && cache.automatic === input.automatic
+    const cachedLayout = (value: string) => cache?.source === value && cache.automatic === input.automatic
       && cache.aspectRatio === aspectRatio ? cache.layout : undefined;
-    const graph = cached?.graph ?? await parseSource(input.source);
+    let value = input.source;
+    let values = [value];
+    let cached = cachedLayout(value);
+    let graph: FlowGraph | NativeDiagram;
+    try {
+      graph = cached?.graph ?? await parseSource(value);
+    } catch (error) {
+      if (token !== revision) return;
+      values = diagramSources(value);
+      if (values.length === 1 && values[0] === value) throw error;
+      value = values[0];
+      cached = cachedLayout(value);
+      graph = cached?.graph ?? await parseSource(value);
+    }
     if (token !== revision) return;
+    const extraTabs: DiagramTab[] = [];
+    for (let index = 1; index < values.length; index++) {
+      try {
+        const other = await parseSource(values[index]);
+        if (token !== revision) return;
+        extraTabs.push({
+          id: newTabId(), title: other.title, source: values[index],
+          original: input.original, automatic: input.automatic,
+        });
+      } catch (error) {
+        throw new Error(`Mermaid block ${index + 1}: ${message(error)}`, { cause: error });
+      }
+    }
     let next: SVGSVGElement;
     let nextLayout: DiagramLayout | undefined;
     let native = input.original || graph.kind === 'native';
@@ -331,7 +357,7 @@ async function render(): Promise<void> {
           engine ??= new ELK({ workerFactory: () => new Worker(workerUrl) });
           nextLayout = await layoutGraph(graph, engine, { automatic: input.automatic, detail: true, measure, aspectRatio });
           if (token !== revision) return;
-          cache = { tabId: input.tabId, source: input.source, automatic: input.automatic, aspectRatio, layout: nextLayout };
+          cache = { tabId: input.tabId, source: value, automatic: input.automatic, aspectRatio, layout: nextLayout };
         }
       } catch (error) {
         if (token !== revision) return;
@@ -340,7 +366,7 @@ async function render(): Promise<void> {
       }
     }
     if (native) {
-      const markup = await renderNative(input.source, get('native-mount', 'div'));
+      const markup = await renderNative(value, get('native-mount', 'div'));
       if (token !== revision) return;
       const template = document.createElement('template');
       template.innerHTML = markup;
@@ -357,11 +383,13 @@ async function render(): Promise<void> {
     layout = nextLayout;
     selected = undefined;
     workspace = updateTab(workspace, input.tabId, {
-      source: input.source,
+      source: value,
       original: input.original,
       automatic: input.automatic,
       title: graph.title,
     });
+    if (extraTabs.length) workspace = activateTab(addTabs(workspace, extraTabs), input.tabId);
+    pending = { ...input, source: value };
     const tabIndex = workspace.tabs.findIndex(item => item.id === input.tabId);
     title = tabLabel(workspace.tabs[tabIndex], tabIndex);
     renderedRevision = token;
@@ -457,7 +485,7 @@ get('file', 'input').addEventListener('change', async event => {
   open.disabled = true;
   notify('Opening diagrams...');
   try {
-    if (file.size > MAX_IMPORT_BYTES) throw new Error('Open a Mermaid or Markdown file smaller than 200 KB.');
+    if (file.size > MAX_DOCUMENT_BYTES) throw new Error('Open a Mermaid or Markdown file smaller than 200 KB.');
     const values = diagramSources(await file.text(), file.name);
     const items: DiagramTab[] = [];
     for (const [index, value] of values.entries()) {

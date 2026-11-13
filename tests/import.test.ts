@@ -42,3 +42,9 @@ test('Markdown without diagrams, empty blocks, and excessive block counts have a
   assert.throws(() => diagramSources('```mermaid\n \n```', 'design.md'), /code block is empty/);
   assert.throws(() => diagramSources('```mermaid\nflowchart LR\nA\n```\n'.repeat(51), 'design.md'), /at most 50/);
 });
+
+test('pasted documents are bounded by UTF-8 bytes before Markdown tokenization', () => {
+  assert.throws(() => diagramSources('x'.repeat(200_001)), /smaller than 200 KB/);
+  assert.throws(() => diagramSources('\u4e2d'.repeat(70_000)), /smaller than 200 KB/);
+  assert.deepEqual(diagramSources(`${'Documentation.\n'.repeat(4_000)}\n\`\`\`mermaid\nflowchart LR\n A --> B\n\`\`\``), ['flowchart LR\n A --> B']);
+});

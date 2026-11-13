@@ -36,7 +36,14 @@ Tabs, sources, layout choices, the active tab, and the
 light/dark appearance are restored on the next visit.
 
 The toolbar also provides source input, SVG/PNG export, zoom, fit, and a
-light/dark toggle. The source dialog allows the same source to be rendered with
+light/dark toggle. **Source accepts pasted Markdown directly:** paste a whole
+document containing fenced `mermaid` blocks and click **Render** or press
+Ctrl/Command + Enter. The first diagram replaces the current tab; additional
+diagrams open in new tabs. Prose and fences are removed from each diagram's
+editable source. If any block is invalid, the previous diagram and tabs remain
+intact. Standalone Mermaid syntax continues to work unchanged.
+
+The source dialog allows the same source to be rendered with
 original Mermaid, or with only its declared subgraphs rather than inferred
 regions. Select a node or arrow to trace its connections; click blank space or
 press Escape to clear. Authored safe hyperlinks remain links.
@@ -136,18 +143,20 @@ exports, fallback, persistence, and mobile behavior:
 
 ```sh
 node --experimental-strip-types tests/compare-rendering.mjs http://127.0.0.1:4381 /tmp/mermaid-comparisons
+node --experimental-strip-types tests/check-paste.mjs http://127.0.0.1:4381 /tmp/mermaid-paste-check
 node tests/check-ui.mjs http://127.0.0.1:4381 /tmp/mermaid-ui-check
 ```
 
-Both commands run sequentially in isolated browser sessions and close them on
+These commands run sequentially in isolated browser sessions and close them on
 completion, including failures.
 
 ## Limits and privacy
 
 There is a 50,000-character source limit, a 500-edge parser limit, and a
-200-node/group structured-layout limit. Imported files are limited to 200 KB
-and 50 Mermaid blocks per Markdown file. Invalid edits show an error and retain
-the previous diagram, with image exports paused until corrected or cancelled.
+200-node/group structured-layout limit. Opened files and pasted Markdown are
+limited to 200 KB and 50 Mermaid blocks per Markdown document. Invalid edits
+show an error and retain the previous diagram, with image exports paused until
+corrected or cancelled.
 Queued renders cannot replace a newer edit with stale output.
 The separated-route grid is capped at 160,000 points; excessively dense layouts
 use a safe connected layout or fall back to original Mermaid with an explanation.
