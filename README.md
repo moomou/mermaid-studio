@@ -58,7 +58,7 @@ The pinned, official Mermaid parser handles syntax and produces an owned graph
 snapshot. It is not a regex reimplementation of the grammar.
 
 1. A compact, connected layout is compared with a reading-region layout. Canvas
-   proportions, overall extent, wire length, and bends guide the choice. Extra
+   proportions, overall extent, wire length, and curvature guide the choice. Extra
    regions must provide a substantial improvement, rather than splitting a
    simple branch or hub merely to reach a region-count target.
 2. Declared outer subgraphs become indivisible units during region inference.
@@ -68,27 +68,37 @@ snapshot. It is not a regex reimplementation of the grammar.
    region-count target.
 4. An independently rooted subgraph stays separate when outside control links
    only join it downstream of its entry.
-5. Each region gets a compact local layout. Cross-region connections are then
-   routed around nodes and captions, so return links do not distort the main
-   flow. Every visible source edge is an actual drawn connection.
+5. Each region is completed before composition: its nodes, internal curves,
+   feedback lanes, captions, and labels all contribute to its bounds. Bridges
+   then connect the finished regions through their gutters. Every visible
+   source edge remains an individually drawn and traceable connection.
 
 Simple charts have no invented headings, numbering, or placeholder diagram
 title. Nodes use the same 16-pixel text size as standard Mermaid, with smaller
-natural boxes and shape-aware label wrapping. Depth-first cycle breaking favors
-the authored forward reading spine instead of promoting feedback destinations.
+natural boxes and shape-aware label wrapping. An acyclic backbone determines
+placement, with balanced forks and joins. Dotted connections still constrain
+placement unless they close a cycle; feedback and self-loops get their own
+routes rather than displacing the forward spine.
 
-Parallel cross-region routes reserve 14 SVG units of clearance and stay 10 units
-away from parallel group borders. Shared destinations get separate arrival
-points. Labels avoid other wires and boundary outlines; fractional grid cells
-are not treated as adequate spacing.
+Visible wires are tangent-continuous cubic curves, not rounded right-angle
+traces. Routing penalizes integrated curvature, so a tiny hook costs more than a
+deliberate broad turn. Decisions depart toward their targets; headings move
+away from entry axes instead of making the spine detour around text.
+
+Compatible fans may share stems, while distinct relation styles and opposing
+returns retain separate ports. Layout-only spacers reserve real curve and label
+corridors without adding visible nodes. Labels are placed on their actual
+connections and avoid other wires, nodes, and unrelated boundaries.
 
 Region headings come from entry nodes/subgraphs. They are topology-based reading
 aids, **not generated architectural meaning or a claim of execution order**.
 There are no deployment-specific rules or keyword checks.
 
-ELK.js performs local box placement in a browser worker. A separate orthogonal
-router connects the regions. ELK is a replaceable JavaScript library, not an
-Eclipse platform dependency.
+ELK.js performs local box placement in a browser worker. The flow router owns
+semantic ports, smooth connections, shared stems, and return lanes. A bounded
+orthogonal router supplies optional obstacle guides; its grid is not the visible
+wire style. ELK is a replaceable JavaScript library, not an Eclipse platform
+dependency.
 
 ## Appearance and syntax
 
@@ -158,8 +168,9 @@ limited to 200 KB and 50 Mermaid blocks per Markdown document. Invalid edits
 show an error and retain the previous diagram, with image exports paused until
 corrected or cancelled.
 Queued renders cannot replace a newer edit with stale output.
-The separated-route grid is capped at 160,000 points; excessively dense layouts
-use a safe connected layout or fall back to original Mermaid with an explanation.
+The optional obstacle-guide grid is capped at 160,000 points. If a safe structured
+drawing cannot be produced, the app falls back to original Mermaid with an
+explanation.
 
 Only one structured layout is cached, and closing its tab releases that cache.
 Unchanged renders reuse the parsed graph without rewriting browser storage.
@@ -201,7 +212,9 @@ labelled **Development build**, rather than displaying a deployment date.
 | `src/import.ts` | Markdown fence extraction without rendering document HTML |
 | `src/structure.ts` | Deterministic topology-based regions, preservation of declared boundaries |
 | `src/layout.ts` / `src/geometry.ts` | Local layout, natural sizing, shape intersections |
-| `src/routing.ts` | Actual cross-region arrows and label placement |
+| `src/curves.ts` | Cubic geometry, curvature cost, curve bounds, and collision checks |
+| `src/flow-routing.ts` | Semantic ports, curve and label placement, shared stems, return lanes |
+| `src/routing.ts` | Bounded optional orthogonal obstacle guides |
 | `src/render.ts` | SVG shapes, source styling, reading guides, tracing |
 | `src/main.ts` / `src/viewport.ts` | Minimal viewer and on-demand source dialog |
 | `src/export.ts` | Complete SVG and bounded PNG output |

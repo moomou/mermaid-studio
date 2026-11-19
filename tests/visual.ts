@@ -5,6 +5,8 @@ import { layoutGraph } from '../src/layout.ts';
 import { renderDiagram } from '../src/render.ts';
 import { browserMeasure } from '../src/text.ts';
 import { renderingCases } from './fixtures/rendering-cases.ts';
+import { curveMetrics } from './route-metrics.ts';
+import type { RouteMetrics } from './route-metrics.ts';
 
 interface PanelMetrics {
   width: number;
@@ -13,6 +15,7 @@ interface PanelMetrics {
   nodes: number;
   edges: number;
   layout?: string;
+  routing?: RouteMetrics;
 }
 
 interface Comparison {
@@ -87,12 +90,18 @@ window.renderComparisons = async ids => {
       const graph = await parseSource(example.source);
       native.style.backgroundColor = graph.background;
       result.native = panel(pair, 'Standard Mermaid', native);
-      const studio = graph.kind === 'flowchart'
-        ? renderDiagram(await layoutGraph(graph, engine, {
+      let studio: SVGSVGElement;
+      let routing: RouteMetrics | undefined;
+      if (graph.kind === 'flowchart') {
+        const layout = await layoutGraph(graph, engine, {
           automatic: true, detail: true, measure, aspectRatio: (pair.clientWidth / 2 - 24) / 366,
-        }), () => {})
-        : native.cloneNode(true) as SVGSVGElement;
-      result.studio = panel(pair, graph.kind === 'flowchart' ? 'Mermaid Studio' : 'Mermaid Studio (native)', studio);
+        });
+        routing = curveMetrics(layout.edges.filter(edge => edge.edge.stroke !== 'invisible').flatMap(edge => edge.curves ?? []));
+        studio = renderDiagram(layout, () => {});
+      } else {
+        studio = native.cloneNode(true) as SVGSVGElement;
+      }
+      result.studio = { ...panel(pair, graph.kind === 'flowchart' ? 'Mermaid Studio' : 'Mermaid Studio (native)', studio), routing };
     } catch (error) {
       result.error = error instanceof Error ? error.message : String(error);
       const failure = document.createElement('div');

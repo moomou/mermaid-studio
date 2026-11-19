@@ -4,22 +4,22 @@ export type MeasureText = (text: string, size: number, bold?: boolean) => number
 
 export const NODE_FONT_SIZE = 16;
 export const NODE_LINE_HEIGHT = 20;
-export const EDGE_FONT_SIZE = 13;
-export const EDGE_LINE_HEIGHT = 17;
+export const EDGE_FONT_SIZE = 14;
+export const EDGE_LINE_HEIGHT = 18;
 
 export function wrapText(text: string, width: number, size: number, measure: MeasureText): string[] {
   const lines: string[] = [];
   for (const paragraph of text.split('\n')) {
     let line = '';
     for (const word of paragraph.split(/\s+/).filter(Boolean)) {
-      if (line && measure(`${line} ${word}`, size) > width) {
+      if (line && measure(`${line} ${word}`, size) > width + 0.01) {
         lines.push(line);
         line = '';
       }
-      if (measure(word, size) > width) {
+      if (measure(word, size) > width + 0.01) {
         if (line) { lines.push(line); line = ''; }
         for (const character of word) {
-          if (line && measure(line + character, size) > width) {
+          if (line && measure(line + character, size) > width + 0.01) {
             lines.push(line);
             line = '';
           }

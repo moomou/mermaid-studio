@@ -6,10 +6,11 @@ import { renderingCases } from './fixtures/rendering-cases.ts';
 const [url, directory] = process.argv.slice(2);
 if (!url || !directory) throw new Error('Usage: node --experimental-strip-types tests/compare-rendering.mjs <dev-server-url> <output-directory>');
 const output = resolve(directory);
+const session = `mermaid-comparisons-${process.pid}`;
 mkdirSync(output, { recursive: true });
 
 function browser(...args) {
-  const response = JSON.parse(execFileSync('agent-browser', ['--session', 'mermaid-comparisons', '--json', ...args], {
+  const response = JSON.parse(execFileSync('agent-browser', ['--session', session, '--json', ...args], {
     encoding: 'utf8', timeout: 120_000, maxBuffer: 4 * 1024 * 1024,
   }));
   if (!response.success) throw new Error(JSON.stringify(response.error));
@@ -34,6 +35,7 @@ try {
     case: item.id,
     native: item.native?.fittedFont,
     studio: item.studio?.fittedFont,
+    sharpJoins: item.studio?.routing?.sharpJoins,
     error: item.error ?? '',
   })));
   const failures = results.filter(item => item.error);

@@ -6,11 +6,13 @@ import { parseSource } from '../src/parser.ts';
 import { examples } from '../src/examples.ts';
 import { buildStructure } from '../src/structure.ts';
 import { layoutGraph } from '../src/layout.ts';
-import { BOUNDARY_ROUTE_GAP, CROSS_ROUTE_GAP, routeConnections } from '../src/routing.ts';
+import { routeConnections } from '../src/routing.ts';
 import { renderDiagram } from '../src/render.ts';
 import { wrapText, approximateMeasure, NODE_FONT_SIZE } from '../src/text.ts';
-import type { Box, DiagramLayout, FlowGraph, Point } from '../src/model.ts';
+import type { Box, DiagramLayout, FlowGraph } from '../src/model.ts';
 import { renderingCases } from './fixtures/rendering-cases.ts';
+import { curveBounds, curveCost, curveIntersectsBox, flattenCurve, insideNode } from '../src/curves.ts';
+import { curveMetrics } from './route-metrics.ts';
 
 const engine = new ELK();
 
@@ -24,24 +26,6 @@ async function graph(source: string): Promise<FlowGraph> {
 function overlaps(a: Box, b: Box): boolean {
   return a.x + 0.1 < b.x + b.width && b.x + 0.1 < a.x + a.width
     && a.y + 0.1 < b.y + b.height && b.y + 0.1 < a.y + a.height;
-}
-
-function longSegments(paths: Point[][]): { axis: 'x' | 'y'; constant: number; low: number; high: number }[] {
-  return paths.flatMap(path => path.slice(1).map((b, index) => {
-    const a = path[index];
-    const vertical = Math.abs(a.x - b.x) < 0.01;
-    return {
-      axis: vertical ? 'x' as const : 'y' as const,
-      constant: vertical ? a.x : a.y,
-      low: vertical ? Math.min(a.y, b.y) : Math.min(a.x, b.x),
-      high: vertical ? Math.max(a.y, b.y) : Math.max(a.x, b.x),
-    };
-  })).filter(segment => segment.high - segment.low > 30);
-}
-
-function parallelGap(a: ReturnType<typeof longSegments>[number], b: ReturnType<typeof longSegments>[number]): number {
-  if (a.axis !== b.axis || Math.min(a.high, b.high) - Math.max(a.low, b.low) < 30) return Infinity;
-  return Math.abs(a.constant - b.constant);
 }
 
 function assertLayout(layout: DiagramLayout): void {
@@ -66,19 +50,37 @@ function assertLayout(layout: DiagramLayout): void {
   }
   for (const group of layout.groups.filter(group => group.depth >= 0)) {
     for (const line of group.lines) assert.ok(approximateMeasure(line, 16) <= group.width - 20, 'Group titles fit their boundary');
+    if (group.caption) {
+      assert.ok(group.caption.x >= 0 && group.caption.y >= 0);
+      for (const node of layout.nodes) assert.equal(overlaps(group.caption, node), false, 'A container heading must not cover a node');
+    }
   }
   for (const route of layout.edges.filter(edge => edge.edge.stroke !== 'invisible')) {
-    for (const points of route.paths) for (let i = 1; i < points.length; i++) {
-      const a = points[i - 1];
-      const b = points[i];
-      assert.ok(Math.abs(a.x - b.x) < 0.01 || Math.abs(a.y - b.y) < 0.01, 'Routes remain orthogonal');
+    assert.ok(route.curves?.length, 'Visible connections have actual curve geometry');
+    assert.equal(curveMetrics(route.curves!).sharpJoins, 0, 'Connections have continuous tangents, not hidden hard corners');
+    const last = route.curves!.at(-1)!;
+    for (const [id, point] of [[route.edge.source, route.curves![0].start], [route.edge.target, last.segments.at(-1)!.end]] as const) {
+      const group = layout.groups.find(group => group.group.id === id);
+      if (!group) continue;
+      assert.ok(point.x >= group.x - 0.1 && point.x <= group.x + group.width + 0.1
+        && point.y >= group.y - 0.1 && point.y <= group.y + group.height + 0.1);
+      const boundaryDistance = Math.min(Math.abs(point.x - group.x), Math.abs(point.x - group.x - group.width),
+        Math.abs(point.y - group.y), Math.abs(point.y - group.y - group.height));
+      assert.ok(boundaryDistance <= 0.1, `${route.edge.id} is detached from its final subgraph boundary`);
+    }
+    for (const curve of route.curves!) {
+      const points = flattenCurve(curve, 0.05);
+      for (const point of points) {
+        assert.ok(Number.isFinite(point.x) && Number.isFinite(point.y));
+        assert.ok(point.x >= -0.1 && point.y >= -0.1 && point.x <= layout.width + 0.1 && point.y <= layout.height + 0.1);
+      }
       for (const node of layout.nodes) {
-        if (node.node.id === route.edge.source || node.node.id === route.edge.target) continue;
+        if (node.node.id === route.edge.source || node.node.id === route.edge.target) {
+          assert.equal(points.some(point => insideNode(point, node)), false, `${route.edge.id} returns through its own endpoint ${node.node.id}`);
+          continue;
+        }
         const box = { x: node.x + 1, y: node.y + 1, width: node.width - 2, height: node.height - 2 };
-        const enters = Math.abs(a.x - b.x) < 0.01
-          ? a.x > box.x && a.x < box.x + box.width && Math.max(a.y, b.y) > box.y && Math.min(a.y, b.y) < box.y + box.height
-          : a.y > box.y && a.y < box.y + box.height && Math.max(a.x, b.x) > box.x && Math.min(a.x, b.x) < box.x + box.width;
-        assert.equal(enters, false, `${route.edge.id} passes through ${node.node.id}`);
+        assert.equal(curveIntersectsBox(curve, box), false, `${route.edge.id} passes through ${node.node.id}`);
       }
     }
     if (route.label) for (const node of layout.nodes) {
@@ -142,8 +144,11 @@ test('all shipped flowcharts preserve graph entities and non-overlapping geometr
 test('cross-region routing uses bounded scratch memory without changing routes', async () => {
   const input = await graph(examples[0].source);
   const layout = await layoutGraph(input, engine, { automatic: true, detail: true, strategy: 'regions' });
-  const expected = layout.edges.filter(edge => edge.crossSection);
-  layout.edges = layout.edges.filter(edge => !edge.crossSection);
+  const inputLayout = structuredClone(layout);
+  inputLayout.edges = inputLayout.edges.filter(edge => !edge.crossSection);
+  const expectedLayout = structuredClone(inputLayout);
+  routeConnections(expectedLayout, approximateMeasure);
+  const expected = expectedLayout.edges.filter(edge => edge.crossSection);
   let allocatedBytes = 0;
   const floatArrays = globalThis.Float64Array;
   const integerArrays = globalThis.Int32Array;
@@ -157,12 +162,12 @@ test('cross-region routing uses bounded scratch memory without changing routes',
   globalThis.Float64Array = track(floatArrays);
   globalThis.Int32Array = track(integerArrays);
   try {
-    routeConnections(layout, approximateMeasure);
+    routeConnections(inputLayout, approximateMeasure);
   } finally {
     globalThis.Float64Array = floatArrays;
     globalThis.Int32Array = integerArrays;
   }
-  assert.deepEqual(layout.edges.filter(edge => edge.crossSection), expected);
+  assert.deepEqual(inputLayout.edges.filter(edge => edge.crossSection), expected);
   const maximumScratchBytes = 160_000 * 2 * (Float64Array.BYTES_PER_ELEMENT + Int32Array.BYTES_PER_ELEMENT);
   assert.ok(allocatedBytes <= maximumScratchBytes, `Routing allocated ${allocatedBytes} scratch bytes`);
 });
@@ -235,6 +240,27 @@ test('multiple arrows retain a subgraph endpoint with a long title', async () =>
   assert.equal(layout.edges.filter(edge => edge.crossSection).length, 6);
 });
 
+test('group endpoint ports follow nested boundaries enlarged by internal feedback in every direction', async () => {
+  for (const direction of ['TB', 'BT', 'LR', 'RL']) {
+    const input = await graph(`flowchart ${direction}
+      S[Source] --> outer
+      subgraph outer[Workflow]
+        U[Entry] --> inner
+        subgraph inner[Processing]
+          A[Start] --> B[Finish]
+          B -. retry .-> A
+        end
+        inner --> Z[Exit]
+        inner -. status .-> U
+      end
+      outer --> F[End]
+      outer -. report .-> S
+    `);
+    const layout = await layoutGraph(input, engine, { automatic: true, detail: true });
+    assertLayout(layout);
+  }
+});
+
 test('long unbroken labels and Unicode are wrapped without losing characters', () => {
   const text = 'abcdefghijklmnopqrstuvwxyz'.repeat(3);
   const lines = wrapText(text, 100, 13, approximateMeasure);
@@ -264,29 +290,15 @@ test('the complete deployment diagram stays compact without collapsed steps or r
   }
 });
 
-test('dashed return paths have real spacing and separate arrival points', async () => {
+test('compatible feedback connections share one arrival stem without losing individual edges', async () => {
   const layout = await layoutGraph(await graph(examples[0].source), engine, { automatic: true, detail: true, strategy: 'regions' });
   const returns = layout.edges.filter(edge => edge.crossSection && edge.edge.stroke === 'dotted');
   assert.equal(returns.length, 3);
-  const arrivals = returns.map(edge => edge.paths.at(-1)!.at(-1)!);
-  assert.equal(new Set(arrivals.map(point => `${point.x},${point.y}`)).size, 3, 'Returns must not collapse onto one port');
-  for (let i = 0; i < returns.length; i++) for (const other of returns.slice(i + 1)) {
-    for (const a of longSegments(returns[i].paths)) for (const b of longSegments(other.paths)) {
-      assert.ok(parallelGap(a, b) >= CROSS_ROUTE_GAP - 0.1, `${returns[i].edge.source}/${other.edge.source} have only ${parallelGap(a, b)}px clearance`);
-    }
-  }
-  for (const edge of layout.edges.filter(edge => edge.crossSection)) {
-    for (const group of layout.groups) {
-      const bounds: Point[] = [
-        { x: group.x, y: group.y }, { x: group.x + group.width, y: group.y },
-        { x: group.x + group.width, y: group.y + group.height },
-        { x: group.x, y: group.y + group.height }, { x: group.x, y: group.y },
-      ];
-      for (const a of longSegments(edge.paths)) for (const b of longSegments([bounds])) {
-        assert.ok(parallelGap(a, b) >= BOUNDARY_ROUTE_GAP - 0.1, `${edge.edge.source} hugs ${group.group.id}'s border`);
-      }
-    }
-  }
+  const arrivals = returns.map(edge => edge.curves!.at(-1)!.segments.at(-1)!.end);
+  assert.equal(new Set(arrivals.map(point => `${point.x},${point.y}`)).size, 1, 'A shared destination should not have a comb of arrowheads');
+  assert.equal(new Set(returns.map(edge => edge.edge.id)).size, 3);
+  assert.equal(new Set(returns.map(edge => `${edge.curves![0].start.x},${edge.curves![0].start.y}`)).size, 3);
+  assertLayout(layout);
 });
 
 test('adaptive layouts preserve readable geometry across the comparison corpus in both grouping modes', async () => {
@@ -348,4 +360,134 @@ test('reading regions improve fitting on wide canvases without forcing them onto
   assert.ok(Math.min(760 / wide.width, 390 / wide.height) > Math.min(760 / portrait.width, 390 / portrait.height) * 1.3);
   assertLayout(wide);
   assertLayout(portrait);
+});
+
+test('decisions have balanced forks, corner departures, and a centered join', async () => {
+  const layout = await layoutGraph(await graph(renderingCases.find(item => item.id === 'branch-tb')!.source), engine, { automatic: true, detail: true });
+  const node = (id: string) => layout.nodes.find(item => item.node.id === id)!;
+  const cx = (id: string) => node(id).x + node(id).width / 2;
+  assert.ok(Math.abs(cx('B') - (cx('C') + cx('D')) / 2) < Math.abs(cx('C') - cx('D')) * 0.05);
+  assert.ok(Math.abs(cx('B') - cx('E')) < 7);
+  const outgoing = layout.edges.filter(edge => edge.edge.source === 'B').map(edge => edge.curves![0].start).sort((a, b) => a.x - b.x);
+  assert.ok(Math.abs(outgoing[0].x - node('B').x) < 0.01);
+  assert.ok(Math.abs(outgoing[1].x - node('B').x - node('B').width) < 0.01);
+  assertLayout(layout);
+});
+
+test('fans use shared stems while preserving every individually traceable connection', async () => {
+  for (const id of ['fan-out', 'fan-in', 'dense-layers']) {
+    const layout = await layoutGraph(await graph(renderingCases.find(item => item.id === id)!.source), engine, { automatic: true, detail: true });
+    const endpoints = new Map<string, Set<string>>();
+    for (const edge of layout.edges) {
+      const end = edge.curves![0].segments.at(-1)!.end;
+      const arrivals = endpoints.get(edge.edge.target) ?? new Set();
+      arrivals.add(`${end.x},${end.y}`);
+      endpoints.set(edge.edge.target, arrivals);
+    }
+    for (const arrivals of endpoints.values()) assert.equal(arrivals.size, 1, 'Shared destinations have one deliberate arrival instead of a comb');
+    assertLayout(layout);
+  }
+});
+
+test('curvature costs penalize abrupt changes rather than merely counting guide vertices', () => {
+  const start = { x: 0, y: 0 };
+  const end = { x: 100, y: 100 };
+  const gentle = { start, segments: [{ control1: { x: 0, y: 60 }, control2: { x: 100, y: 40 }, end }] };
+  const abrupt = { start, segments: [{ control1: { x: 0, y: 1 }, control2: { x: 100, y: 0 }, end }] };
+  assert.ok(curveCost(gentle) < curveCost(abrupt));
+  const loop = { start, segments: [{ control1: { x: 100, y: 100 }, control2: { x: -100, y: 100 }, end: start }] };
+  const bounds = curveBounds(loop);
+  assert.ok(bounds.width < 100, 'Export bounds describe the visible curve, not distant control handles');
+  assert.ok(Math.abs(bounds.height - 75) < 0.01);
+});
+
+test('a diagram made of dotted connections still keeps its authored flow direction', async () => {
+  for (const direction of ['TB', 'BT', 'LR', 'RL']) {
+    const layout = await layoutGraph(await graph(`flowchart ${direction}\nA -.-> B -.-> C`), engine, { automatic: true, detail: true });
+    const a = layout.nodes.find(item => item.node.id === 'A')!;
+    const c = layout.nodes.find(item => item.node.id === 'C')!;
+    assert.ok(direction === 'TB' ? a.y < c.y : direction === 'BT' ? a.y > c.y : direction === 'LR' ? a.x < c.x : a.x > c.x);
+    assertLayout(layout);
+  }
+});
+
+test('container headings move away from a forward entry instead of making the spine hook around text', async () => {
+  const layout = await layoutGraph(await graph(renderingCases.find(item => item.id === 'nested-groups')!.source), engine, { automatic: true, detail: true });
+  for (const [source, target] of [['U', 'A'], ['B', 'C']]) {
+    const edge = layout.edges.find(item => item.edge.source === source && item.edge.target === target)!;
+    const curve = edge.curves![0];
+    for (const point of flattenCurve(curve)) assert.ok(Math.abs(point.x - curve.start.x) < 0.1, 'A vertical entry remains a straight connection');
+  }
+  assertLayout(layout);
+});
+
+test('different relation styles and opposing returns do not disappear into a shared port', async () => {
+  for (const id of ['cycle', 'parallel-edges']) {
+    const layout = await layoutGraph(await graph(renderingCases.find(item => item.id === id)!.source), engine, { automatic: true, detail: true });
+    const arrivals = layout.edges.filter(edge => edge.edge.target === (id === 'cycle' ? 'A' : 'B'));
+    const solid = arrivals.find(edge => edge.edge.stroke === 'normal')!.curves![0].segments.at(-1)!.end;
+    const dotted = arrivals.find(edge => edge.edge.stroke === 'dotted')!.curves![0].segments.at(-1)!.end;
+    assert.ok(Math.hypot(solid.x - dotted.x, solid.y - dotted.y) >= 14);
+    assertLayout(layout);
+  }
+  const layout = await layoutGraph(await graph(renderingCases.find(item => item.id === 'feedback-network')!.source), engine, { automatic: true, detail: true });
+  const incoming = layout.edges.find(edge => edge.edge.source === 'F' && edge.edge.target === 'C')!.curves![0].segments.at(-1)!.end;
+  const outgoing = layout.edges.find(edge => edge.edge.source === 'C' && edge.edge.target === 'B')!.curves![0].start;
+  assert.ok(Math.hypot(incoming.x - outgoing.x, incoming.y - outgoing.y) >= 14);
+  assertLayout(layout);
+});
+
+test('parallel channels with different authored paints keep separate paths and arrowheads', async () => {
+  const layout = await layoutGraph(await graph(`flowchart LR
+    A -->|Read| B
+    A ==>|Write| B
+    linkStyle 0 stroke:#cc3333
+    linkStyle 1 stroke:#3333cc
+  `), engine, { automatic: true, detail: true });
+  const ends = layout.edges.map(edge => edge.curves![0].segments.at(-1)!.end);
+  assert.ok(Math.hypot(ends[0].x - ends[1].x, ends[0].y - ends[1].y) >= 14);
+  assertLayout(layout);
+});
+
+test('return ports stay distinct from other relation styles and opposing endpoints across regions', async () => {
+  for (const id of ['checkout', 'data', 'ungrouped']) {
+    const layout = await layoutGraph(await graph(renderingCases.find(item => item.id === id)!.source), engine,
+      { automatic: true, detail: true, strategy: 'regions' });
+    const end = (route: typeof layout.edges[number]) => route.curves!.at(-1)!.segments.at(-1)!.end;
+    for (const route of layout.edges.filter(route => route.edge.stroke === 'dotted')) {
+      for (const other of layout.edges.filter(other => other !== route)) {
+        if (other.edge.target === route.edge.target && other.edge.stroke !== route.edge.stroke) {
+          assert.ok(Math.hypot(end(route).x - end(other).x, end(route).y - end(other).y) >= 10,
+            `${id}: different relation styles need separate arrowheads`);
+        }
+        if (other.edge.target === route.edge.source) {
+          const start = route.curves![0].start;
+          assert.ok(Math.hypot(start.x - end(other).x, start.y - end(other).y) >= 10,
+            `${id}: a return must not begin on another edge's arrowhead`);
+        }
+      }
+    }
+    assertLayout(layout);
+  }
+});
+
+test('a labeled leaf fan preserves authored order without a node-count-sized vertical corridor', async () => {
+  const input = await graph(renderingCases.find(item => item.id === 'fan-out')!.source);
+  const layout = await layoutGraph(input, engine, { automatic: true, detail: true });
+  const workers = layout.nodes.filter(node => node.node.id !== 'A');
+  assert.deepEqual([...workers].sort((a, b) => a.x - b.x).map(node => node.node.id),
+    input.nodes.filter(node => node.id !== 'A').map(node => node.id));
+  assert.ok(layout.height <= 300, 'A two-rank fan should not become a tall diagram');
+  assert.equal(new Set(layout.edges.map(edge => JSON.stringify(edge.curves![0].start))).size, 1);
+  assertLayout(layout);
+});
+
+test('aligned chains through slanted shape boundaries stay straight', async () => {
+  const layout = await layoutGraph(await graph(renderingCases.find(item => item.id === 'shapes')!.source), engine,
+    { automatic: true, detail: true });
+  for (const source of ['A', 'B']) {
+    const curve = layout.edges.find(edge => edge.edge.source === source)!.curves![0];
+    for (const point of flattenCurve(curve)) assert.ok(Math.abs(point.y - curve.start.y) < 0.1);
+  }
+  assertLayout(layout);
 });

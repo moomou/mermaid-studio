@@ -2,6 +2,7 @@ import type { Box, DiagramLayout, Paint, Point, PositionedNode } from './model.t
 import { edgeDescription } from './layout.ts';
 import { nodePolygon } from './geometry.ts';
 import { EDGE_FONT_SIZE, EDGE_LINE_HEIGHT, NODE_FONT_SIZE, NODE_LINE_HEIGHT } from './text.ts';
+import { curveData } from './curves.ts';
 
 const SVG = 'http://www.w3.org/2000/svg';
 
@@ -118,13 +119,13 @@ export function renderDiagram(layout: DiagramLayout, select: (selection: Selecti
   `));
   for (const marker of ['arrow', 'circle', 'cross']) {
     const mark = element('marker', {
-      id: `${prefix}-${marker}`, markerWidth: 7, markerHeight: 7,
-      refX: marker === 'arrow' ? 6.5 : 3.5, refY: 3.5,
-      orient: 'auto-start-reverse', markerUnits: 'userSpaceOnUse', viewBox: '0 0 7 7',
+      id: `${prefix}-${marker}`, markerWidth: marker === 'cross' ? 9 : 7, markerHeight: marker === 'cross' ? 9 : 7,
+      refX: marker === 'cross' ? 9 : marker === 'circle' ? 7 : 6.5, refY: marker === 'cross' ? 4.5 : 3.5,
+      orient: 'auto-start-reverse', markerUnits: 'userSpaceOnUse', viewBox: marker === 'cross' ? '0 0 9 9' : '0 0 7 7',
     });
     if (marker === 'arrow') mark.append(element('path', { d: 'M 0 0 L 7 3.5 L 0 7 Z', fill: 'context-stroke' }));
-    if (marker === 'circle') mark.append(element('circle', { cx: 3.5, cy: 3.5, r: 2.8, fill: '#fff', stroke: 'context-stroke', 'stroke-width': 1.2 }));
-    if (marker === 'cross') mark.append(element('path', { d: 'M 1 1 L 6 6 M 6 1 L 1 6', stroke: 'context-stroke', 'stroke-width': 1.3 }));
+    if (marker === 'circle') mark.append(element('circle', { cx: 3.5, cy: 3.5, r: 2.8, fill: 'context-stroke', stroke: 'context-stroke', 'stroke-width': 1.2 }));
+    if (marker === 'cross') mark.append(element('path', { d: 'M 1 1 L 8 8 M 8 1 L 1 8', stroke: 'context-stroke', 'stroke-width': 1.4 }));
     defs.append(mark);
   }
   svg.append(defs, rectangle({ x: 0, y: 0, width: layout.width, height: layout.height }, { fill: paper }));
@@ -160,8 +161,9 @@ export function renderDiagram(layout: DiagramLayout, select: (selection: Selecti
     const group = element('g', { class: 'group', 'data-entity': box.group.id, 'data-section': box.sectionId });
     const paint = paintAttributes(box.group.paint, { fill: 'none', stroke: '#aeb9ae' });
     group.append(rectangle(box, { rx: 9, 'stroke-dasharray': '6 6', ...paint }));
+    if (box.caption) captions.append(rectangle(box.caption, { fill: paint.fill === 'none' ? paper : paint.fill }));
     box.lines.forEach((line, index) => captions.append(element('text', {
-      x: box.x + 10, y: box.y + 24 + index * 19, class: 'group-label',
+      x: box.caption ? box.caption.x + 2 : box.x + 10, y: box.y + 24 + index * 19, class: 'group-label',
       style: `stroke:${paint.fill === 'none' ? paper : paint.fill};${box.group.paint.color ? `fill:${box.group.paint.color}` : ''}`,
     }, line)));
     group.append(element('title', {}, `Declared subgraph: ${box.group.label}`));
@@ -178,17 +180,18 @@ export function renderDiagram(layout: DiagramLayout, select: (selection: Selecti
       class: 'edge', 'data-edge': edge.id, 'data-source': edge.source, 'data-target': edge.target,
       'data-cross-section': String(Boolean(line.crossSection)),
     });
-    for (const [index, points] of line.paths.entries()) {
+    const paths = line.curves?.map(curveData) ?? line.paths.map(pathData);
+    for (const [index, path] of paths.entries()) {
       const attributes: Record<string, string | number> = {
-        d: pathData(points), fill: 'none',
+        d: path, fill: 'none',
         stroke: edge.paint.stroke ?? (edge.stroke === 'dotted' ? '#81938b' : '#4c6258'),
         'stroke-width': edge.paint.strokeWidth ?? (edge.stroke === 'thick' ? 3 : 1.3),
         'stroke-linejoin': 'round', 'stroke-linecap': 'round', class: 'edge-line',
       };
-      if (edge.paint.dash || edge.stroke === 'dotted') attributes['stroke-dasharray'] = edge.paint.dash ?? '4 5';
+      if (edge.paint.dash || edge.stroke === 'dotted') attributes['stroke-dasharray'] = edge.paint.dash ?? '2 5';
       if (edge.startMarker !== 'none' && index === 0) attributes['marker-start'] = `url(#${prefix}-${edge.startMarker})`;
-      if (edge.endMarker !== 'none' && index === line.paths.length - 1) attributes['marker-end'] = `url(#${prefix}-${edge.endMarker})`;
-      group.append(element('path', { d: attributes.d, fill: 'none', stroke: paper, 'stroke-width': (Number(attributes['stroke-width']) + 3), 'stroke-linejoin': 'round' }));
+      if (edge.endMarker !== 'none' && index === paths.length - 1) attributes['marker-end'] = `url(#${prefix}-${edge.endMarker})`;
+      if (!line.curves) group.append(element('path', { d: attributes.d, fill: 'none', stroke: paper, 'stroke-width': (Number(attributes['stroke-width']) + 3), 'stroke-linejoin': 'round' }));
       group.append(element('path', attributes));
       group.append(element('path', { d: attributes.d, fill: 'none', stroke: 'transparent', 'stroke-width': 12 }));
     }

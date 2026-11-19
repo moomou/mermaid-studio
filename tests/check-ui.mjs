@@ -7,11 +7,12 @@ import { fileURLToPath } from 'node:url';
 const [url, directory] = process.argv.slice(2);
 if (!url || !directory) throw new Error('Usage: node tests/check-ui.mjs <app-url> <output-directory>');
 const output = resolve(directory);
+const session = `mermaid-ui-check-${process.pid}`;
 const fixture = name => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 mkdirSync(output, { recursive: true });
 
 function browser(...args) {
-  const response = JSON.parse(execFileSync('agent-browser', ['--session', 'mermaid-ui-check', '--json', ...args], {
+  const response = JSON.parse(execFileSync('agent-browser', ['--session', session, '--json', ...args], {
     encoding: 'utf8', timeout: 120_000, maxBuffer: 4 * 1024 * 1024,
   }));
   if (!response.success) throw new Error(JSON.stringify(response.error));

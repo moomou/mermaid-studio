@@ -89,6 +89,17 @@ export interface Point { x: number; y: number }
 export interface Box extends Point { width: number; height: number }
 export interface TextLine { text: string; secondary: boolean }
 
+export interface CurveSegment {
+  control1: Point;
+  control2: Point;
+  end: Point;
+}
+
+export interface CurvePath {
+  start: Point;
+  segments: CurveSegment[];
+}
+
 export interface PositionedNode extends Box {
   node: DiagramNode;
   lines: TextLine[];
@@ -100,11 +111,13 @@ export interface PositionedGroup extends Box {
   sectionId: string;
   lines: string[];
   depth: number;
+  caption?: Box;
 }
 
 export interface PositionedEdge {
   edge: DiagramEdge;
   paths: Point[][];
+  curves?: CurvePath[];
   label?: Box & { lines: string[] };
   sectionId: string;
   crossSection?: boolean;
