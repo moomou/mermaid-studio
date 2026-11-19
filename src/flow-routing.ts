@@ -438,8 +438,12 @@ export function routeFlowConnections(
         const main = parallelCurve(startJunction, endJunction, (parallel.indexOf(edge) - (parallel.length - 1) / 2) * 48, direction);
         candidates.push({ path: withStems(main, start, end), label: main });
       } else {
-        const aligned = Math.abs(startJunction.point.x - endJunction.point.x) < 0.01 || Math.abs(startJunction.point.y - endJunction.point.y) < 0.01;
-        if (aligned && ((!feedback && !startStem && !targetStem)
+        const dx = endJunction.point.x - startJunction.point.x;
+        const dy = endJunction.point.y - startJunction.point.y;
+        const aligned = Math.abs(dx) < 0.01 || Math.abs(dy) < 0.01;
+        const outward = dx * start.normal.x + dy * start.normal.y > 0.01
+          && dx * end.normal.x + dy * end.normal.y < -0.01;
+        if (aligned && outward && ((!feedback && !startStem && !targetStem)
           || (start.normal.x === -end.normal.x && start.normal.y === -end.normal.y))) {
           const main = { start: startJunction.point, segments: [lineSegment(startJunction.point, endJunction.point)] };
           candidates.push({ path: withStems(main, start, end), label: main });

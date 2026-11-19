@@ -491,3 +491,13 @@ test('aligned chains through slanted shape boundaries stay straight', async () =
   }
   assertLayout(layout);
 });
+
+test('a mixed-direction region bridge leaves and enters its faces rather than running along their borders', async () => {
+  const layout = await layoutGraph(await graph(renderingCases.find(item => item.id === 'mixed-directions')!.source), engine,
+    { automatic: true, detail: true });
+  const curve = layout.edges.find(edge => edge.edge.source === 'C' && edge.edge.target === 'D')!.curves![0];
+  assert.ok(curve.segments[0].control1.x > curve.start.x);
+  const last = curve.segments.at(-1)!;
+  assert.ok(last.control2.x > last.end.x);
+  assertLayout(layout);
+});
